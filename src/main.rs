@@ -1,8 +1,13 @@
 mod config;
+mod doctor;
 mod editor;
+mod envs;
+mod history;
 mod menu;
 mod path_menu;
+mod picker;
 mod ports;
+mod procs;
 mod profile;
 mod shortcut;
 
@@ -43,6 +48,19 @@ enum Command {
 
     /// Open the interactive TCP ports menu.
     Ports(ports::PortsArgs),
+
+    /// Run health checks for the ps installation.
+    Doctor,
+
+    /// Open the interactive process menu.
+    #[command(alias = "processes")]
+    Procs(procs::ProcsArgs),
+
+    /// Open the command history menu.
+    History(history::HistoryArgs),
+
+    /// Open the environment variables menu.
+    Envs(envs::EnvsArgs),
 
     /// Run a shortcut in a child process.
     Run {
@@ -111,6 +129,10 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Ports(args) => ports::run(args),
+        Command::Doctor => doctor::run(),
+        Command::Procs(args) => procs::run(args),
+        Command::History(args) => history::run(args),
+        Command::Envs(args) => envs::run(args),
         Command::Run { name, args } => shortcut::run(&name, &args),
         Command::Emit { name, args } => {
             println!("{}", shortcut::emit(&name, &args)?);

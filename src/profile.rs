@@ -1966,6 +1966,77 @@ function global:ports {{
     & $script:PsCliPath @__psPortsArgs
 }}
 
+foreach ($__psUtilityAlias in @('doctor', 'procs', 'processes', 'history', 'envs', 'reload', 'mkcd')) {{
+    if (Test-Path -LiteralPath "Alias:$__psUtilityAlias") {{
+        Remove-Item -LiteralPath "Alias:$__psUtilityAlias" -Force -ErrorAction SilentlyContinue
+    }}
+}}
+
+function global:doctor {{
+    & $script:PsCliPath doctor @args
+}}
+
+function global:procs {{
+    & $script:PsCliPath procs @args
+}}
+
+function global:processes {{
+    & $script:PsCliPath processes @args
+}}
+
+function global:envs {{
+    & $script:PsCliPath envs @args
+}}
+
+function global:history {{
+    $resultPath = Join-Path ([IO.Path]::GetTempPath()) "ps-history-$PID-$([Guid]::NewGuid().ToString('N')).txt"
+
+    try {{
+        & $script:PsCliPath history --result $resultPath @args
+        $__psHistoryExitCode = $LASTEXITCODE
+        $global:LASTEXITCODE = $__psHistoryExitCode
+
+        if ($__psHistoryExitCode -ne 0) {{ return }}
+        if (-not (Test-Path -LiteralPath $resultPath)) {{ return }}
+
+        $command = Get-Content -LiteralPath $resultPath -Raw
+        if (-not [string]::IsNullOrWhiteSpace($command)) {{
+            Invoke-Expression $command
+        }}
+    }} finally {{
+        if (Test-Path -LiteralPath $resultPath) {{
+            Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+        }}
+    }}
+}}
+
+function global:reload {{
+    $tokens = $null
+    $errors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($PROFILE, [ref]$tokens, [ref]$errors) | Out-Null
+
+    if ($null -ne $errors -and $errors.Count -gt 0) {{
+        foreach ($parseError in $errors) {{
+            Write-Error $parseError.Message
+        }}
+
+        return
+    }}
+
+    . $PROFILE
+    Write-Host 'Profile reloaded.' -ForegroundColor Green
+}}
+
+function global:mkcd {{
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [string]$Path
+    )
+
+    New-Item -ItemType Directory -Force -Path $Path | Out-Null
+    Set-Location -LiteralPath $Path
+}}
+
 try {{
     if (Get-Command Set-PSReadLineKeyHandler -ErrorAction SilentlyContinue) {{
         Set-PSReadLineKeyHandler -Key Enter -ScriptBlock {{
@@ -2201,6 +2272,18 @@ mod tests {
             "__psRenderSettingsSelectionChange $entries $settings $oldSelected $selected $top"
         ));
         assert!(block.contains("function global:ports"));
+        assert!(block.contains("function global:doctor"));
+        assert!(block.contains("function global:procs"));
+        assert!(block.contains("function global:processes"));
+        assert!(block.contains("function global:history"));
+        assert!(block.contains("function global:envs"));
+        assert!(block.contains("function global:reload"));
+        assert!(block.contains("function global:mkcd"));
+        assert!(block.contains("Remove-Item -LiteralPath \"Alias:$__psUtilityAlias\""));
+        assert!(block.contains("& $script:PsCliPath history --result $resultPath @args"));
+        assert!(block.contains("Invoke-Expression $command"));
+        assert!(block.contains("ParseFile($PROFILE, [ref]$tokens, [ref]$errors)"));
+        assert!(block.contains("Set-Location -LiteralPath $Path"));
         assert!(block.contains("section = 'paths'"));
         assert!(block.contains("section = 'actions'"));
         assert!(block.contains("kind = 'delete'"));

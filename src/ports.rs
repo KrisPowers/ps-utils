@@ -5,11 +5,11 @@ use std::{
     process::Command,
     sync::mpsc::{self, TryRecvError},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
-use clap::Args;
+use clap::{Args, ValueEnum};
 use crossterm::{
     cursor::{Hide, MoveTo, Show, position},
     event::{Event, KeyCode, KeyEventKind, KeyModifiers, poll, read},
@@ -30,6 +30,38 @@ pub struct PortsArgs {
     /// Show only one local TCP port.
     #[arg(short = 'p', long = "port", value_parser = clap::value_parser!(u16).range(1..=65535))]
     pub port: Option<u16>,
+
+    /// Filter by TCP state, like established, time-wait, or listen.
+    #[arg(short = 's', long = "state")]
+    pub state: Option<String>,
+
+    /// Filter by process name.
+    #[arg(short = 'n', long = "name")]
+    pub name: Option<String>,
+
+    /// Keep refreshing the interactive menu while it is open.
+    #[arg(long)]
+    pub refresh: bool,
+
+    /// Sort rows by port, state, or process.
+    #[arg(long, value_enum, default_value_t = PortsSort::Port)]
+    pub sort: PortsSort,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PortsSort {
+    Port,
+    State,
+    Process,
+}
+
+#[derive(Debug, Clone)]
+struct PortQuery {
+    port: Option<u16>,
+    state: Option<String>,
+    name: Option<String>,
+    refresh: bool,
+    sort: PortsSort,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +72,7 @@ struct PortRow {
     remote_address: String,
     pid: u32,
     process: String,
+    process_path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,31 +90,34 @@ struct PortsMenu {
     selected_row: usize,
     focus: Focus,
     status: Option<String>,
-    port_filter: Option<u16>,
+    query: PortQuery,
 }
 
 pub fn run(args: PortsArgs) -> Result<()> {
+    let query = PortQuery::from(args);
+
     if !stdin().is_terminal() || !stdout().is_terminal() {
-        let rows = tcp_ports(args.port)?;
-        print_plain(&rows, args.port);
+        let rows = tcp_ports(&query)?;
+        print_plain(&rows, &query);
         return Ok(());
     }
 
-    run_interactive(args.port)
+    run_interactive(query)
 }
 
-fn run_interactive(port_filter: Option<u16>) -> Result<()> {
+fn run_interactive(query: PortQuery) -> Result<()> {
     let mut stdout = stdout();
     let _guard = TerminalGuard::enter(&mut stdout)?;
     queue!(stdout, Print("\n"))?;
     stdout.flush()?;
     let (_, top) = position().context("failed to read cursor position")?;
 
-    render_loading_shell(&mut stdout, top, port_filter)?;
+    render_loading_shell(&mut stdout, top, &query)?;
 
     let (sender, receiver) = mpsc::channel();
+    let load_query = query.clone();
     let _loader = thread::spawn(move || {
-        let _ = sender.send(tcp_ports(port_filter));
+        let _ = sender.send(tcp_ports(&load_query));
     });
 
     let mut frame = 0usize;
@@ -122,10 +158,10 @@ fn run_interactive(port_filter: Option<u16>) -> Result<()> {
         frame = frame.wrapping_add(1);
     };
 
-    PortsMenu::new(rows, port_filter).run_at(&mut stdout, top)
+    PortsMenu::new(rows, query).run_at(&mut stdout, top)
 }
 
-fn tcp_ports(port_filter: Option<u16>) -> Result<Vec<PortRow>> {
+fn tcp_ports(query: &PortQuery) -> Result<Vec<PortRow>> {
     if !cfg!(windows) {
         bail!("ports is currently implemented for Windows");
     }
@@ -149,8 +185,14 @@ fn tcp_ports(port_filter: Option<u16>) -> Result<Vec<PortRow>> {
             continue;
         };
 
-        if let Some(port_filter) = port_filter
+        if let Some(port_filter) = query.port
             && parsed.port != port_filter
+        {
+            continue;
+        }
+
+        if let Some(state_filter) = &query.state
+            && !tcp_state_matches(&parsed.state, state_filter)
         {
             continue;
         }
@@ -170,34 +212,51 @@ fn tcp_ports(port_filter: Option<u16>) -> Result<Vec<PortRow>> {
         parsed_rows.push(parsed);
     }
 
-    let names = process_names(&pids);
+    let process_info = process_infos(&pids);
     let mut rows = Vec::new();
 
     for parsed in parsed_rows {
-        let process_name = names
+        let info = process_info
             .get(&parsed.pid)
             .cloned()
-            .unwrap_or_else(|| fallback_process_name(parsed.pid));
-        rows.push(PortRow {
+            .unwrap_or_else(|| ProcessInfo::fallback(parsed.pid));
+        let row = PortRow {
             port: parsed.port,
             state: display_tcp_state(&parsed.state),
             address: parsed.address,
             remote_address: parsed.remote_address,
             pid: parsed.pid,
-            process: format!("{process_name} ({})", parsed.pid),
-        });
+            process: format!("{} ({})", info.name, parsed.pid),
+            process_path: info.path,
+        };
+
+        if let Some(name_filter) = &query.name
+            && !row
+                .process
+                .to_lowercase()
+                .contains(&name_filter.to_lowercase())
+        {
+            continue;
+        }
+
+        rows.push(row);
     }
 
-    rows.sort_by(|left, right| {
-        left.port
-            .cmp(&right.port)
-            .then_with(|| left.address.cmp(&right.address))
-            .then_with(|| left.remote_address.cmp(&right.remote_address))
-            .then_with(|| left.state.cmp(&right.state))
-            .then_with(|| left.pid.cmp(&right.pid))
-    });
+    sort_rows(&mut rows, query.sort);
 
     Ok(rows)
+}
+
+impl From<PortsArgs> for PortQuery {
+    fn from(args: PortsArgs) -> Self {
+        Self {
+            port: args.port,
+            state: args.state,
+            name: args.name,
+            refresh: args.refresh,
+            sort: args.sort,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -279,21 +338,99 @@ fn display_tcp_state(state: &str) -> String {
     }
 }
 
-fn process_names(pids: &HashSet<u32>) -> HashMap<u32, String> {
+fn tcp_state_matches(state: &str, filter: &str) -> bool {
+    let normalized_filter = normalize_state_token(filter);
+    if normalized_filter.is_empty() {
+        return true;
+    }
+
+    let raw = normalize_state_token(state);
+    let display = normalize_state_token(&display_tcp_state(state));
+
+    raw == normalized_filter
+        || display == normalized_filter
+        || (state == "LISTENING" && normalized_filter == "listen")
+}
+
+fn normalize_state_token(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessInfo {
+    name: String,
+    path: String,
+}
+
+impl ProcessInfo {
+    fn fallback(pid: u32) -> Self {
+        Self {
+            name: fallback_process_name(pid),
+            path: String::new(),
+        }
+    }
+}
+
+fn process_infos(pids: &HashSet<u32>) -> HashMap<u32, ProcessInfo> {
     let mut system = System::new_all();
     system.refresh_processes();
 
     pids.iter()
         .map(|pid| {
-            let name = system
+            let info = system
                 .process(Pid::from_u32(*pid))
-                .map(|process| clean_process_name(process.name()))
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or_else(|| fallback_process_name(*pid));
+                .map(|process| {
+                    let name = clean_process_name(process.name());
+                    let path = process
+                        .exe()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default();
 
-            (*pid, name)
+                    ProcessInfo {
+                        name: if name.trim().is_empty() {
+                            fallback_process_name(*pid)
+                        } else {
+                            name
+                        },
+                        path,
+                    }
+                })
+                .unwrap_or_else(|| ProcessInfo::fallback(*pid));
+
+            (*pid, info)
         })
         .collect()
+}
+
+fn sort_rows(rows: &mut [PortRow], sort: PortsSort) {
+    match sort {
+        PortsSort::Port => rows.sort_by(|left, right| {
+            left.port
+                .cmp(&right.port)
+                .then_with(|| left.address.cmp(&right.address))
+                .then_with(|| left.remote_address.cmp(&right.remote_address))
+                .then_with(|| left.state.cmp(&right.state))
+                .then_with(|| left.pid.cmp(&right.pid))
+        }),
+        PortsSort::State => rows.sort_by(|left, right| {
+            left.state
+                .cmp(&right.state)
+                .then_with(|| left.port.cmp(&right.port))
+                .then_with(|| left.process.cmp(&right.process))
+                .then_with(|| left.remote_address.cmp(&right.remote_address))
+        }),
+        PortsSort::Process => rows.sort_by(|left, right| {
+            left.process
+                .cmp(&right.process)
+                .then_with(|| left.port.cmp(&right.port))
+                .then_with(|| left.state.cmp(&right.state))
+                .then_with(|| left.remote_address.cmp(&right.remote_address))
+        }),
+    }
 }
 
 fn clean_process_name(name: &str) -> String {
@@ -314,23 +451,30 @@ fn fallback_process_name(pid: u32) -> String {
 }
 
 impl PortsMenu {
-    fn new(rows: Vec<PortRow>, port_filter: Option<u16>) -> Self {
+    fn new(rows: Vec<PortRow>, query: PortQuery) -> Self {
         Self {
             rows,
             page: 0,
             selected_row: 0,
             focus: Focus::Row,
             status: None,
-            port_filter,
+            query,
         }
     }
 
     fn run_at(mut self, stdout: &mut std::io::Stdout, top: u16) -> Result<()> {
         self.normalize_selection();
         render_full(stdout, top, &self)?;
+        let mut last_auto_refresh = Instant::now();
 
         loop {
             if !poll(Duration::from_millis(250)).context("failed to poll terminal input")? {
+                if self.query.refresh && last_auto_refresh.elapsed() >= Duration::from_secs(2) {
+                    self.refresh_rows()?;
+                    render_full(stdout, top, &self)?;
+                    last_auto_refresh = Instant::now();
+                }
+
                 continue;
             }
 
@@ -366,7 +510,13 @@ impl PortsMenu {
                     full_render = self.next_page();
                 }
                 KeyCode::Enter => {
-                    full_render = self.accept()?;
+                    full_render = self.accept(stdout, top)?;
+                    last_auto_refresh = Instant::now();
+                }
+                KeyCode::Char('r') => {
+                    self.refresh_rows()?;
+                    full_render = true;
+                    last_auto_refresh = Instant::now();
                 }
                 KeyCode::Esc => {
                     clear_region(stdout, top)?;
@@ -495,13 +645,11 @@ impl PortsMenu {
         true
     }
 
-    fn accept(&mut self) -> Result<bool> {
+    fn accept(&mut self, stdout: &mut std::io::Stdout, top: u16) -> Result<bool> {
         match self.focus {
             Focus::Row => {
-                if self.visible_count() > 0 {
-                    self.focus = Focus::Kill;
-                }
-                Ok(false)
+                self.show_detail(stdout, top)?;
+                Ok(true)
             }
             Focus::Kill => {
                 let Some(row) = self.visible_rows().get(self.selected_row).cloned() else {
@@ -509,23 +657,69 @@ impl PortsMenu {
                 };
 
                 self.status = Some(kill_process(&row));
-                self.rows = tcp_ports(self.port_filter)?;
-                if self.page >= self.page_count() {
-                    self.page = self.page_count() - 1;
-                }
-                self.selected_row = self
-                    .selected_row
-                    .min(self.visible_count().saturating_sub(1));
-                self.focus = if self.visible_count() > 0 {
-                    Focus::Row
-                } else {
-                    Focus::Next
-                };
+                self.refresh_rows()?;
                 Ok(true)
             }
             Focus::Prev => Ok(self.previous_page()),
             Focus::Next => Ok(self.next_page()),
         }
+    }
+
+    fn refresh_rows(&mut self) -> Result<()> {
+        self.rows = tcp_ports(&self.query)?;
+
+        if self.page >= self.page_count() {
+            self.page = self.page_count() - 1;
+        }
+
+        self.selected_row = self
+            .selected_row
+            .min(self.visible_count().saturating_sub(1));
+        self.focus = if self.visible_count() > 0 {
+            Focus::Row
+        } else {
+            Focus::Next
+        };
+
+        Ok(())
+    }
+
+    fn show_detail(&mut self, stdout: &mut std::io::Stdout, top: u16) -> Result<()> {
+        let Some(row) = self.visible_rows().get(self.selected_row).cloned() else {
+            return Ok(());
+        };
+
+        let mut status = None;
+
+        loop {
+            render_detail(stdout, top, &row, status.as_deref())?;
+
+            if !poll(Duration::from_millis(250)).context("failed to poll terminal input")? {
+                continue;
+            }
+
+            let Event::Key(event) = read().context("failed to read terminal input")? else {
+                continue;
+            };
+
+            if event.kind == KeyEventKind::Release {
+                continue;
+            }
+
+            match event.code {
+                KeyCode::Enter | KeyCode::Char('k') => {
+                    let message = kill_process(&row);
+                    self.status = Some(message.clone());
+                    status = Some(message);
+                    self.refresh_rows()?;
+                }
+                KeyCode::Esc | KeyCode::Backspace => break,
+                KeyCode::Char('c') if event.modifiers.contains(KeyModifiers::CONTROL) => break,
+                _ => {}
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -553,18 +747,10 @@ fn kill_process(row: &PortRow) -> String {
     }
 }
 
-fn render_loading_shell(
-    stdout: &mut std::io::Stdout,
-    top: u16,
-    port_filter: Option<u16>,
-) -> Result<()> {
+fn render_loading_shell(stdout: &mut std::io::Stdout, top: u16, query: &PortQuery) -> Result<()> {
     clear_region(stdout, top)?;
 
-    let title = if let Some(port) = port_filter {
-        format!("TCP Ports: {port}")
-    } else {
-        "TCP Ports".to_string()
-    };
+    let title = ports_title(query);
 
     queue!(
         stdout,
@@ -606,11 +792,7 @@ fn render_full(stdout: &mut std::io::Stdout, top: u16, menu: &PortsMenu) -> Resu
     clear_region(stdout, top)?;
 
     let page_count = menu.page_count();
-    let title = if let Some(port) = menu.port_filter {
-        format!("TCP Ports: {port}")
-    } else {
-        "TCP Ports".to_string()
-    };
+    let title = ports_title(&menu.query);
     let (width, _) = size().unwrap_or((100, 30));
     let (local_width, remote_width, _) = column_widths(width);
 
@@ -834,11 +1016,74 @@ fn render_help(stdout: &mut std::io::Stdout, top: u16) -> Result<()> {
         Clear(ClearType::CurrentLine),
         SetForegroundColor(Color::DarkGrey),
         Print(
-            "Use Up/Down. Right selects Kill. PageUp/PageDown changes pages. Enter selects. Esc closes."
+            "Use Up/Down. Enter opens details. Right selects Kill. R refreshes. PageUp/PageDown changes pages. Esc closes."
         ),
         ResetColor
     )?;
     Ok(())
+}
+
+fn render_detail(
+    stdout: &mut std::io::Stdout,
+    top: u16,
+    row: &PortRow,
+    status: Option<&str>,
+) -> Result<()> {
+    clear_region(stdout, top)?;
+
+    queue!(
+        stdout,
+        MoveTo(0, top),
+        SetForegroundColor(Color::DarkGrey),
+        Print("TCP Port Detail"),
+        ResetColor,
+        MoveTo(0, top + 2),
+        Print(format!("Port: {}", row.port)),
+        MoveTo(0, top + 3),
+        Print(format!("State: {}", row.state)),
+        MoveTo(0, top + 4),
+        Print(format!("Local: {}", row.address)),
+        MoveTo(0, top + 5),
+        Print(format!("Remote: {}", row.remote_address)),
+        MoveTo(0, top + 6),
+        Print(format!("PID: {}", row.pid)),
+        MoveTo(0, top + 7),
+        Print(format!("Process: {}", row.process)),
+        MoveTo(0, top + 8),
+        Print(format!(
+            "Path: {}",
+            if row.process_path.trim().is_empty() {
+                "(unknown)"
+            } else {
+                &row.process_path
+            }
+        )),
+        MoveTo(0, top + 10),
+        SetForegroundColor(Color::White),
+        SetBackgroundColor(Color::DarkRed),
+        Print("[ Kill ]"),
+        ResetColor,
+        MoveTo(0, top + 12),
+        SetForegroundColor(Color::DarkGrey),
+        Print("Enter or K kills. Esc returns."),
+        ResetColor
+    )?;
+
+    if let Some(status) = status {
+        queue!(
+            stdout,
+            MoveTo(0, top + 14),
+            SetForegroundColor(if status.starts_with("Failed") {
+                Color::Red
+            } else {
+                Color::Green
+            }),
+            Print(status),
+            ResetColor
+        )?;
+    }
+
+    stdout.flush().context("failed to render port detail")
 }
 
 fn clear_region(stdout: &mut std::io::Stdout, top: u16) -> Result<()> {
@@ -853,12 +1098,8 @@ fn clear_region(stdout: &mut std::io::Stdout, top: u16) -> Result<()> {
     stdout.flush().context("failed to clear ports menu")
 }
 
-fn print_plain(rows: &[PortRow], port_filter: Option<u16>) {
-    if let Some(port) = port_filter {
-        println!("TCP Ports: {port}");
-    } else {
-        println!("TCP Ports");
-    }
+fn print_plain(rows: &[PortRow], query: &PortQuery) {
+    println!("{}", ports_title(query));
 
     println!(
         "{:>6} {:<13} {:<22} {:<26} Process",
@@ -883,6 +1124,41 @@ fn column_widths(terminal_width: u16) -> (usize, usize, usize) {
     let process_width = remaining.saturating_sub(remote_width).max(10);
 
     (local_width, remote_width, process_width)
+}
+
+fn ports_title(query: &PortQuery) -> String {
+    let mut title = if let Some(port) = query.port {
+        format!("TCP Ports: {port}")
+    } else {
+        "TCP Ports".to_string()
+    };
+
+    if let Some(state) = &query.state
+        && !state.trim().is_empty()
+    {
+        title.push_str(&format!(" | state: {state}"));
+    }
+
+    if let Some(name) = &query.name
+        && !name.trim().is_empty()
+    {
+        title.push_str(&format!(" | process: {name}"));
+    }
+
+    title.push_str(&format!(" | sort: {}", sort_label(query.sort)));
+    if query.refresh {
+        title.push_str(" | live refresh");
+    }
+
+    title
+}
+
+fn sort_label(sort: PortsSort) -> &'static str {
+    match sort {
+        PortsSort::Port => "port",
+        PortsSort::State => "state",
+        PortsSort::Process => "process",
+    }
 }
 
 fn clamp(value: &str, max: usize) -> String {
@@ -962,6 +1238,46 @@ mod tests {
     }
 
     #[test]
+    fn matches_state_filters_flexibly() {
+        assert!(tcp_state_matches("ESTABLISHED", "established"));
+        assert!(tcp_state_matches("TIME_WAIT", "time-wait"));
+        assert!(tcp_state_matches("TIME_WAIT", "time wait"));
+        assert!(tcp_state_matches("LISTENING", "listen"));
+        assert!(tcp_state_matches("LISTENING", "listening"));
+        assert!(!tcp_state_matches("CLOSE_WAIT", "established"));
+    }
+
+    #[test]
+    fn sorts_rows_by_requested_field() {
+        let mut rows = vec![
+            PortRow {
+                port: 3000,
+                state: "Established".to_string(),
+                address: "127.0.0.1".to_string(),
+                remote_address: "127.0.0.1:1".to_string(),
+                pid: 2,
+                process: "zeta (2)".to_string(),
+                process_path: String::new(),
+            },
+            PortRow {
+                port: 1000,
+                state: "Listen".to_string(),
+                address: "127.0.0.1".to_string(),
+                remote_address: "0.0.0.0".to_string(),
+                pid: 1,
+                process: "alpha (1)".to_string(),
+                process_path: String::new(),
+            },
+        ];
+
+        sort_rows(&mut rows, PortsSort::Process);
+        assert_eq!(rows[0].process, "alpha (1)");
+
+        sort_rows(&mut rows, PortsSort::Port);
+        assert_eq!(rows[0].port, 1000);
+    }
+
+    #[test]
     fn computes_page_count() {
         let rows = vec![
             PortRow {
@@ -971,11 +1287,21 @@ mod tests {
                 remote_address: "0.0.0.0".to_string(),
                 pid: 1,
                 process: "test (1)".to_string(),
+                process_path: String::new(),
             };
             45
         ];
 
-        let menu = PortsMenu::new(rows, None);
+        let menu = PortsMenu::new(
+            rows,
+            PortQuery {
+                port: None,
+                state: None,
+                name: None,
+                refresh: false,
+                sort: PortsSort::Port,
+            },
+        );
         assert_eq!(menu.page_count(), 3);
     }
 

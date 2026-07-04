@@ -205,6 +205,14 @@ pub fn ensure_settings_config() -> Result<PathBuf> {
     Ok(path)
 }
 
+pub fn load_settings_config() -> Result<SettingsConfig> {
+    let path = ensure_settings_config()?;
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read settings config at {}", path.display()))?;
+    serde_json::from_str(strip_utf8_bom(&raw))
+        .with_context(|| format!("failed to parse settings config at {}", path.display()))
+}
+
 pub fn load_commands() -> Result<CommandsConfig> {
     let path = ensure_commands_config()?;
     let raw = fs::read_to_string(&path)

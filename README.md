@@ -46,15 +46,38 @@ homebase
 
 `ports` is also available without the `ps` prefix. It opens an interactive menu
 of TCP ports and connections, showing port, state, local address, remote address,
-and owning process. Each row has a `Kill` action to the right. Up/Down navigation stays on port
-rows, Right moves to `Kill`, Left moves back to the row, and Enter runs the
-selected action. The Rust-backed menu shows 20 ports per page and updates only
-the changed rows while you move around.
+and owning process. Each row has a `Kill` action to the right. Up/Down
+navigation stays on port rows, Enter opens a detail view, Right moves to `Kill`,
+Left moves back to the row, and `R` refreshes. The Rust-backed menu shows 20
+ports per page and updates only the changed rows while you move around.
 
 ```powershell
 ports
 ports -p 3000
+ports -s established
+ports -n chrome
+ports --sort process
+ports --refresh
 ```
+
+Other built-in prefixless utilities:
+
+```powershell
+doctor
+procs
+processes
+history
+envs
+reload
+mkcd scratch
+```
+
+`doctor` checks the profile bridge, managed config files, saved paths, PATH, and
+history/session storage. `procs` and `processes` open a process menu with a kill
+action. `history` opens saved terminal history and runs the selected command in
+the current shell. `envs` opens an environment variable browser. `reload`
+validates and dot-sources `$PROFILE`. `mkcd` creates a directory and moves into
+it.
 
 ## Saved Paths
 
@@ -147,7 +170,7 @@ to new PowerShell windows. Spawned restore shells skip restore to avoid loops.
 Reload the current PowerShell session after editing commands:
 
 ```powershell
-. $PROFILE
+reload
 ```
 
 ## Shortcut Types
