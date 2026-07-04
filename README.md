@@ -44,6 +44,18 @@ kill 3000
 homebase
 ```
 
+`ports` is also available without the `ps` prefix. It opens an interactive menu
+of listening TCP ports, showing port, state, local address, and owning process.
+Each row has a `Kill` action to the right. Up/Down navigation stays on port
+rows, Right moves to `Kill`, Left moves back to the row, and Enter runs the
+selected action. The menu shows 20 ports per page and starts loading the full
+port list in the background while page one is shown.
+
+```powershell
+ports
+ports -p 3000
+```
+
 ## Saved Paths
 
 Type `@` by itself and press Enter to open the saved paths menu. The menu starts
