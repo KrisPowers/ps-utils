@@ -45,11 +45,11 @@ homebase
 ```
 
 `ports` is also available without the `ps` prefix. It opens an interactive menu
-of listening TCP ports, showing port, state, local address, and owning process.
-Each row has a `Kill` action to the right. Up/Down navigation stays on port
+of TCP ports and connections, showing port, state, local address, remote address,
+and owning process. Each row has a `Kill` action to the right. Up/Down navigation stays on port
 rows, Right moves to `Kill`, Left moves back to the row, and Enter runs the
-selected action. The menu shows 20 ports per page and starts loading the full
-port list in the background while page one is shown.
+selected action. The Rust-backed menu shows 20 ports per page and updates only
+the changed rows while you move around.
 
 ```powershell
 ports

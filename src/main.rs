@@ -2,6 +2,7 @@ mod config;
 mod editor;
 mod menu;
 mod path_menu;
+mod ports;
 mod profile;
 mod shortcut;
 
@@ -39,6 +40,9 @@ enum Command {
         #[arg(value_enum)]
         file: ConfigPathArg,
     },
+
+    /// Open the interactive TCP ports menu.
+    Ports(ports::PortsArgs),
 
     /// Run a shortcut in a child process.
     Run {
@@ -106,6 +110,7 @@ fn main() -> Result<()> {
             println!("{}", config_path(file.into()).display());
             Ok(())
         }
+        Command::Ports(args) => ports::run(args),
         Command::Run { name, args } => shortcut::run(&name, &args),
         Command::Emit { name, args } => {
             println!("{}", shortcut::emit(&name, &args)?);

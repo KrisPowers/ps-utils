@@ -669,13 +669,32 @@ function global:__psLaunchSessionPath {{
     if ([string]::IsNullOrWhiteSpace($clean)) {{ return }}
 
     $escaped = $clean.Replace("'", "''")
-    $command = "Set-Location -LiteralPath '$escaped'"
-    $powershellCommand = "set PS_SKIP_SESSION_RESTORE=1&& powershell.exe -NoExit -Command ""$command"""
+    $escapedProfile = ([string]$PROFILE).Replace("'", "''")
+    $command = "`$env:PS_SKIP_SESSION_RESTORE = '1'; . '$escapedProfile'; Set-Location -LiteralPath '$escaped'"
+    $shell = ''
+
+    try {{
+        $shell = [string](Get-Process -Id $PID -ErrorAction SilentlyContinue).Path
+    }} catch {{ }}
+
+    if ([string]::IsNullOrWhiteSpace($shell)) {{
+        if ($PSVersionTable.PSEdition -eq 'Core') {{
+            $shell = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
+        }} else {{
+            $shell = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+        }}
+    }}
+
+    if ([string]::IsNullOrWhiteSpace($shell)) {{
+        $shell = 'powershell.exe'
+    }}
+
+    $arguments = @('-NoExit', '-NoProfile', '-Command', $command)
 
     if (Get-Command wt.exe -ErrorAction SilentlyContinue) {{
-        Start-Process wt.exe -ArgumentList @('new-tab', 'cmd.exe', '/c', $powershellCommand)
+        Start-Process wt.exe -ArgumentList (@('new-tab', $shell) + $arguments)
     }} else {{
-        Start-Process cmd.exe -ArgumentList @('/c', $powershellCommand)
+        Start-Process -FilePath $shell -ArgumentList $arguments
     }}
 }}
 
@@ -823,6 +842,21 @@ function global:__psClearMenuRegion {{
     }} catch {{ }}
 }}
 
+function global:__psClearMenuLine {{
+    param([int]$Line)
+
+    try {{
+        $width = [Math]::Max(1, [Console]::BufferWidth - 1)
+        $blank = ' ' * $width
+        [Console]::SetCursorPosition(0, $Line)
+        [Console]::Write($blank)
+        [Console]::SetCursorPosition(0, $Line)
+        return $true
+    }} catch {{
+        return $false
+    }}
+}}
+
 function global:__psClampMenuText {{
     param(
         [string]$Text,
@@ -873,10 +907,8 @@ function global:__psIsDestructiveMenuItem {{
     return (
         $kind -eq 'delete' -or
         $kind -eq 'clear' -or
-        $kind -eq 'kill' -or
         $label.StartsWith('Delete') -or
-        $label.StartsWith('Clear') -or
-        $label.StartsWith('Kill')
+        $label.StartsWith('Clear')
     )
 }}
 
@@ -1050,6 +1082,86 @@ function global:__psRenderSettingsMenu {{
     Write-Host 'Use Up/Down. Enter toggles or edits. Left/Right adjusts numbers. Esc closes.' -ForegroundColor DarkGray
 }}
 
+function global:__psSettingsEntryLine {{
+    param(
+        [object[]]$Entries,
+        [int]$EntryIndex,
+        [int]$Top
+    )
+
+    $line = $Top + 2
+    $lastGroup = ''
+
+    for ($index = 0; $index -lt $Entries.Count; $index += 1) {{
+        $entry = $Entries[$index]
+        $group = [string]$entry.group
+
+        if ($group -ne $lastGroup) {{
+            if (-not [string]::IsNullOrWhiteSpace($lastGroup)) {{
+                $line += 1
+            }}
+
+            $line += 1
+            $lastGroup = $group
+        }}
+
+        if ([int]$entry.index -eq $EntryIndex) {{
+            return $line
+        }}
+
+        $line += 1
+    }}
+
+    return $Top
+}}
+
+function global:__psRenderSettingsEntryLine {{
+    param(
+        [object[]]$Entries,
+        [object]$Settings,
+        [int]$Selected,
+        [int]$Top,
+        [int]$EntryIndex
+    )
+
+    if ($EntryIndex -lt 0 -or $EntryIndex -ge $Entries.Count) {{ return }}
+
+    $entry = $Entries[$EntryIndex]
+    $line = __psSettingsEntryLine $Entries $EntryIndex $Top
+
+    if (-not (__psClearMenuLine $line)) {{ return }}
+
+    Write-Host '  ' -NoNewline
+    Write-Host ([string]$entry.label).PadRight(22) -NoNewline
+
+    if ($entry.kind -eq 'number') {{
+        __psWriteSettingsValueButton (__psSettingValueText $Settings $entry) ([int]$entry.index -eq $Selected)
+    }} else {{
+        __psWriteSettingsToggleButton (__psSettingEnabled $Settings $entry) ([int]$entry.index -eq $Selected)
+    }}
+
+    Write-Host ''
+    try {{ [Console]::Out.Flush() }} catch {{ }}
+}}
+
+function global:__psRenderSettingsSelectionChange {{
+    param(
+        [object[]]$Entries,
+        [object]$Settings,
+        [int]$OldSelected,
+        [int]$Selected,
+        [int]$Top
+    )
+
+    if ($OldSelected -eq $Selected) {{
+        __psRenderSettingsEntryLine $Entries $Settings $Selected $Top $Selected
+        return
+    }}
+
+    __psRenderSettingsEntryLine $Entries $Settings $Selected $Top $OldSelected
+    __psRenderSettingsEntryLine $Entries $Settings $Selected $Top $Selected
+}}
+
 function global:__psRenderSettingsNumberInput {{
     param(
         [object]$Entry,
@@ -1144,8 +1256,12 @@ function global:__psInvokeSettingsMenu {{
     }} catch {{ }}
 
     try {{
+        __psRenderSettingsMenu $entries $settings $selected $top $height
+
         while ($true) {{
-            __psRenderSettingsMenu $entries $settings $selected $top $height
+            $oldSelected = $selected
+            $renderFull = $false
+            $renderSelected = $false
             $keyInfo = [Console]::ReadKey($true)
 
             switch ($keyInfo.Key) {{
@@ -1168,12 +1284,14 @@ function global:__psInvokeSettingsMenu {{
                 'LeftArrow' {{
                     if ($entries[$selected].kind -eq 'number') {{
                         $settings = __psAdjustSetting ([string]$entries[$selected].key) -50
+                        $renderSelected = $true
                     }}
                     break
                 }}
                 'RightArrow' {{
                     if ($entries[$selected].kind -eq 'number') {{
                         $settings = __psAdjustSetting ([string]$entries[$selected].key) 50
+                        $renderSelected = $true
                     }}
                     break
                 }}
@@ -1184,11 +1302,21 @@ function global:__psInvokeSettingsMenu {{
                 'Enter' {{
                     if ($entries[$selected].kind -eq 'number') {{
                         $settings = __psReadSettingsNumberInput $entries[$selected] $settings $top $height
+                        $renderFull = $true
                     }} else {{
                         $settings = __psToggleSetting ([string]$entries[$selected].key)
+                        $renderSelected = $true
                     }}
                     break
                 }}
+            }}
+
+            if ($renderFull) {{
+                __psRenderSettingsMenu $entries $settings $selected $top $height
+            }} elseif ($oldSelected -ne $selected) {{
+                __psRenderSettingsSelectionChange $entries $settings $oldSelected $selected $top
+            }} elseif ($renderSelected) {{
+                __psRenderSettingsEntryLine $entries $settings $selected $top $selected
             }}
         }}
     }} finally {{
@@ -1243,6 +1371,110 @@ function global:__psRenderPathMenu {{
     Write-Host ''
     Write-Host ''
     Write-Host 'Use arrows. Enter selects. Esc cancels.' -ForegroundColor DarkGray
+}}
+
+function global:__psPathEntryLine {{
+    param(
+        [object[]]$Entries,
+        [int]$EntryIndex,
+        [int]$Top
+    )
+
+    if ($EntryIndex -lt 0 -or $EntryIndex -ge $Entries.Count) {{ return $Top }}
+
+    $entry = $Entries[$EntryIndex]
+
+    if ($entry.section -eq 'actions') {{
+        $actionEntries = @($Entries | Where-Object {{ $_.section -eq 'actions' }})
+        for ($index = 0; $index -lt $actionEntries.Count; $index += 1) {{
+            if ([int]$actionEntries[$index].index -eq $EntryIndex) {{
+                return ($Top + 1 + $index)
+            }}
+        }}
+    }}
+
+    if ($entry.section -eq 'paths') {{
+        $openIndex = $EntryIndex
+        if ($entry.kind -eq 'delete') {{
+            $openIndex = __psOpenPathIndexForDelete $Entries $entry
+        }}
+
+        $savedPathEntries = @($Entries | Where-Object {{ $_.section -eq 'paths' -and $_.kind -eq 'open' }})
+        for ($index = 0; $index -lt $savedPathEntries.Count; $index += 1) {{
+            if ([int]$savedPathEntries[$index].index -eq [int]$openIndex) {{
+                return ($Top + 5 + $index)
+            }}
+        }}
+    }}
+
+    return $Top
+}}
+
+function global:__psRenderPathEntryLine {{
+    param(
+        [object[]]$Entries,
+        [int]$Selected,
+        [int]$Top,
+        [int]$EntryIndex
+    )
+
+    if ($EntryIndex -lt 0 -or $EntryIndex -ge $Entries.Count) {{ return }}
+
+    $entry = $Entries[$EntryIndex]
+
+    if ($entry.section -eq 'actions') {{
+        $line = __psPathEntryLine $Entries $EntryIndex $Top
+        if (-not (__psClearMenuLine $line)) {{ return }}
+
+        __psWritePathMenuButton $entry ([int]$entry.index -eq $Selected)
+        Write-Host ''
+        try {{ [Console]::Out.Flush() }} catch {{ }}
+        return
+    }}
+
+    if ($entry.section -eq 'paths') {{
+        $pathEntry = $entry
+        if ($entry.kind -eq 'delete') {{
+            $pathEntry = $Entries[(__psOpenPathIndexForDelete $Entries $entry)]
+        }}
+
+        $deleteEntry = $null
+        $deleteIndex = __psDeleteIndexForOpenPath $Entries $pathEntry
+        if ($deleteIndex -ge 0 -and $deleteIndex -lt $Entries.Count -and $Entries[$deleteIndex].kind -eq 'delete') {{
+            $deleteEntry = $Entries[$deleteIndex]
+        }}
+
+        $line = __psPathEntryLine $Entries ([int]$pathEntry.index) $Top
+        if (-not (__psClearMenuLine $line)) {{ return }}
+
+        __psWritePathMenuPath `
+            $pathEntry `
+            $deleteEntry `
+            ([int]$pathEntry.index -eq $Selected) `
+            ($null -ne $deleteEntry -and [int]$deleteEntry.index -eq $Selected)
+
+        try {{ [Console]::Out.Flush() }} catch {{ }}
+    }}
+}}
+
+function global:__psRenderPathSelectionChange {{
+    param(
+        [object[]]$Entries,
+        [int]$OldSelected,
+        [int]$Selected,
+        [int]$Top
+    )
+
+    $oldLine = __psPathEntryLine $Entries $OldSelected $Top
+    $newLine = __psPathEntryLine $Entries $Selected $Top
+
+    if ($oldLine -eq $newLine) {{
+        __psRenderPathEntryLine $Entries $Selected $Top $Selected
+        return
+    }}
+
+    __psRenderPathEntryLine $Entries $Selected $Top $OldSelected
+    __psRenderPathEntryLine $Entries $Selected $Top $Selected
 }}
 
 function global:__psSaveCurrentPath {{
@@ -1341,6 +1573,27 @@ function global:__psRenderClearSavedPathsConfirm {{
     Write-Host 'Use Left/Right. Enter selects. Esc cancels.' -ForegroundColor DarkGray
 }}
 
+function global:__psRenderConfirmButtonLine {{
+    param(
+        [object[]]$Buttons,
+        [int]$Selected,
+        [int]$Line
+    )
+
+    if (-not (__psClearMenuLine $Line)) {{ return }}
+
+    for ($index = 0; $index -lt $Buttons.Count; $index += 1) {{
+        if ($index -gt 0) {{
+            Write-Host '  ' -NoNewline
+        }}
+
+        __psWritePathMenuButton $Buttons[$index] ($index -eq $Selected)
+    }}
+
+    Write-Host ''
+    try {{ [Console]::Out.Flush() }} catch {{ }}
+}}
+
 function global:__psConfirmClearSavedPaths {{
     param(
         [int]$Top,
@@ -1348,9 +1601,15 @@ function global:__psConfirmClearSavedPaths {{
     )
 
     $selected = 0
+    $buttons = @(
+        [pscustomobject]@{{ label = 'Cancel' }},
+        [pscustomobject]@{{ label = 'Clear saved paths' }}
+    )
+
+    __psRenderClearSavedPathsConfirm $Top $Height $selected
 
     while ($true) {{
-        __psRenderClearSavedPathsConfirm $Top $Height $selected
+        $oldSelected = $selected
         $keyInfo = [Console]::ReadKey($true)
 
         switch ($keyInfo.Key) {{
@@ -1376,6 +1635,10 @@ function global:__psConfirmClearSavedPaths {{
             'Enter' {{
                 return ($selected -eq 1)
             }}
+        }}
+
+        if ($oldSelected -ne $selected) {{
+            __psRenderConfirmButtonLine $buttons $selected ($Top + 2)
         }}
     }}
 }}
@@ -1420,9 +1683,15 @@ function global:__psConfirmDeleteSavedPath {{
     )
 
     $selected = 0
+    $buttons = @(
+        [pscustomobject]@{{ label = 'Cancel' }},
+        [pscustomobject]@{{ label = 'Delete path' }}
+    )
+
+    __psRenderDeleteSavedPathConfirm $Path $Top $Height $selected
 
     while ($true) {{
-        __psRenderDeleteSavedPathConfirm $Path $Top $Height $selected
+        $oldSelected = $selected
         $keyInfo = [Console]::ReadKey($true)
 
         switch ($keyInfo.Key) {{
@@ -1449,15 +1718,17 @@ function global:__psConfirmDeleteSavedPath {{
                 return ($selected -eq 1)
             }}
         }}
+
+        if ($oldSelected -ne $selected) {{
+            __psRenderConfirmButtonLine $buttons $selected ($Top + 3)
+        }}
     }}
 }}
 
 function global:__psVerticalMenuIndexes {{
     param([object[]]$Entries)
 
-    return @(@($Entries) | Where-Object {{
-        $_.kind -ne 'delete' -and $_.kind -ne 'kill'
-    }} | ForEach-Object {{ [int]$_.index }})
+    return @(@($Entries) | Where-Object {{ $_.kind -ne 'delete' }} | ForEach-Object {{ [int]$_.index }})
 }}
 
 function global:__psOpenPathIndexForDelete {{
@@ -1503,8 +1774,6 @@ function global:__psMoveMenuSelectionVertical {{
     $baseline = $Selected
     if ($Entries[$Selected].kind -eq 'delete') {{
         $baseline = __psOpenPathIndexForDelete $Entries $Entries[$Selected]
-    }} elseif ($Entries[$Selected].kind -eq 'kill') {{
-        $baseline = __psPortIndexForKill $Entries $Entries[$Selected]
     }}
 
     $position = 0
@@ -1540,8 +1809,11 @@ function global:__psInvokePathMenu {{
     }} catch {{ }}
 
     try {{
+        __psRenderPathMenu $entries $selected $top $height $currentPath
+
         while ($true) {{
-            __psRenderPathMenu $entries $selected $top $height $currentPath
+            $oldSelected = $selected
+            $renderFull = $false
             $keyInfo = [Console]::ReadKey($true)
 
             switch ($keyInfo.Key) {{
@@ -1581,717 +1853,46 @@ function global:__psInvokePathMenu {{
                 }}
                 'Enter' {{
                     $entry = $entries[$selected]
-                    __psClearMenuRegion $top $height
 
                     if ($entry.kind -eq 'save') {{
+                        __psClearMenuRegion $top $height
                         __psSaveCurrentPath $currentPath
+                        return
                     }} elseif ($entry.kind -eq 'clear') {{
+                        __psClearMenuRegion $top $height
                         if (__psConfirmClearSavedPaths $top $height) {{
                             __psClearMenuRegion $top $height
                             __psClearSavedPaths
                             return
                         }}
 
+                        $renderFull = $true
                         break
                     }} elseif ($entry.kind -eq 'delete') {{
+                        __psClearMenuRegion $top $height
                         if (__psConfirmDeleteSavedPath ([string]$entry.path) $top $height) {{
                             __psClearMenuRegion $top $height
                             __psDeleteSavedPath ([string]$entry.path)
                             return
                         }}
 
+                        $renderFull = $true
                         break
                     }} else {{
+                        __psClearMenuRegion $top $height
                         __psOpenSavedPath ([string]$entry.path)
+                        return
                     }}
-
-                    return
                 }}
+            }}
+
+            if ($renderFull) {{
+                __psRenderPathMenu $entries $selected $top $height $currentPath
+            }} elseif ($oldSelected -ne $selected) {{
+                __psRenderPathSelectionChange $entries $oldSelected $selected $top
             }}
         }}
     }} finally {{
-        try {{
-            [Console]::CursorVisible = $oldCursorVisible
-        }} catch {{ }}
-    }}
-}}
-
-function global:__psPortStateRank {{
-    param([string]$State)
-
-    switch ($State) {{
-        'Listen' {{ return 0 }}
-        'Established' {{ return 1 }}
-        'Bound' {{ return 2 }}
-        default {{ return 9 }}
-    }}
-}}
-
-function global:__psPortPageSize {{
-    return 20
-}}
-
-function global:__psPortRowsFromConnections {{
-    param([object[]]$Connections)
-
-    $processNames = @{{}}
-    foreach ($connection in @($Connections)) {{
-        $ownerProcessId = [int]$connection.OwningProcess
-        if ($processNames.ContainsKey($ownerProcessId)) {{ continue }}
-
-        try {{
-            $process = Get-Process -Id $ownerProcessId -ErrorAction Stop
-            $processNames[$ownerProcessId] = [string]$process.ProcessName
-        }} catch {{
-            $processNames[$ownerProcessId] = "PID $ownerProcessId"
-        }}
-    }}
-
-    $rows = @()
-    $seen = @{{}}
-
-    $connections = @(@($Connections) | Sort-Object `
-        @{{ Expression = {{ __psPortStateRank ([string]$_.State) }}; Ascending = $true }}, `
-        @{{ Expression = {{ [int]$_.LocalPort }}; Ascending = $true }}, `
-        @{{ Expression = {{ [string]$_.LocalAddress }}; Ascending = $true }}, `
-        @{{ Expression = {{ [int]$_.OwningProcess }}; Ascending = $true }})
-
-    foreach ($connection in $connections) {{
-        $ownerProcessId = [int]$connection.OwningProcess
-        $port = [int]$connection.LocalPort
-        $state = [string]$connection.State
-        $address = [string]$connection.LocalAddress
-        $key = "$address|$port|$state|$ownerProcessId"
-
-        if ($seen.ContainsKey($key)) {{ continue }}
-        $seen[$key] = $true
-
-        $processName = [string]$processNames[$ownerProcessId]
-        if ([string]::IsNullOrWhiteSpace($processName)) {{
-            $processName = "PID $ownerProcessId"
-        }}
-
-        $rows += [pscustomobject]@{{
-            port = $port
-            state = $state
-            address = $address
-            pid = $ownerProcessId
-            process = "$processName ($ownerProcessId)"
-        }}
-    }}
-
-    return $rows
-}}
-
-function global:__psPortRows {{
-    param(
-        [object]$Port = $null,
-        [int]$Limit = 0
-    )
-
-    $connections = @()
-
-    try {{
-        $parameters = @{{
-            State = 'Listen'
-            ErrorAction = 'Stop'
-        }}
-
-        if ($null -ne $Port) {{
-            $parameters.LocalPort = [int]$Port
-        }}
-
-        $connections = @(Get-NetTCPConnection @parameters | Where-Object {{
-            $null -ne $_ -and
-            $null -ne $_.LocalPort -and
-            [int]$_.LocalPort -gt 0 -and
-            $null -ne $_.OwningProcess -and
-            [int]$_.OwningProcess -gt 0
-        }})
-
-        if ($Limit -gt 0) {{
-            $connections = @($connections | Select-Object -First $Limit)
-        }}
-    }} catch {{
-        return @()
-    }}
-
-    return @(__psPortRowsFromConnections $connections)
-}}
-
-function global:__psStartPortsBackgroundJob {{
-    try {{
-        return (Start-Job -ScriptBlock {{
-            function __psJobPortStateRank {{
-                param([string]$State)
-
-                switch ($State) {{
-                    'Listen' {{ return 0 }}
-                    'Established' {{ return 1 }}
-                    'Bound' {{ return 2 }}
-                    default {{ return 9 }}
-                }}
-            }}
-
-            $connections = @()
-            try {{
-                $connections = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object {{
-                    $null -ne $_ -and
-                    $null -ne $_.LocalPort -and
-                    [int]$_.LocalPort -gt 0 -and
-                    $null -ne $_.OwningProcess -and
-                    [int]$_.OwningProcess -gt 0
-                }})
-            }} catch {{
-                return @()
-            }}
-
-            $processNames = @{{}}
-            foreach ($connection in $connections) {{
-                $ownerProcessId = [int]$connection.OwningProcess
-                if ($processNames.ContainsKey($ownerProcessId)) {{ continue }}
-
-                try {{
-                    $process = Get-Process -Id $ownerProcessId -ErrorAction Stop
-                    $processNames[$ownerProcessId] = [string]$process.ProcessName
-                }} catch {{
-                    $processNames[$ownerProcessId] = "PID $ownerProcessId"
-                }}
-            }}
-
-            $rows = @()
-            $seen = @{{}}
-            $connections = @($connections | Sort-Object `
-                @{{ Expression = {{ __psJobPortStateRank ([string]$_.State) }}; Ascending = $true }}, `
-                @{{ Expression = {{ [int]$_.LocalPort }}; Ascending = $true }}, `
-                @{{ Expression = {{ [string]$_.LocalAddress }}; Ascending = $true }}, `
-                @{{ Expression = {{ [int]$_.OwningProcess }}; Ascending = $true }})
-
-            foreach ($connection in $connections) {{
-                $ownerProcessId = [int]$connection.OwningProcess
-                $port = [int]$connection.LocalPort
-                $state = [string]$connection.State
-                $address = [string]$connection.LocalAddress
-                $key = "$address|$port|$state|$ownerProcessId"
-
-                if ($seen.ContainsKey($key)) {{ continue }}
-                $seen[$key] = $true
-
-                $processName = [string]$processNames[$ownerProcessId]
-                if ([string]::IsNullOrWhiteSpace($processName)) {{
-                    $processName = "PID $ownerProcessId"
-                }}
-
-                [pscustomobject]@{{
-                    port = $port
-                    state = $state
-                    address = $address
-                    pid = $ownerProcessId
-                    process = "$processName ($ownerProcessId)"
-                }}
-            }}
-        }})
-    }} catch {{
-        return $null
-    }}
-}}
-
-function global:__psReceivePortsBackgroundJob {{
-    param([object]$Job)
-
-    if ($null -eq $Job) {{
-        return [pscustomobject]@{{ complete = $false; failed = $false; rows = @(); message = '' }}
-    }}
-
-    if ($Job.State -eq 'Completed') {{
-        try {{
-            $rows = @(Receive-Job -Job $Job -ErrorAction SilentlyContinue)
-            Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue
-            return [pscustomobject]@{{ complete = $true; failed = $false; rows = $rows; message = '' }}
-        }} catch {{
-            Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue
-            return [pscustomobject]@{{ complete = $true; failed = $true; rows = @(); message = 'Failed to load remaining ports.' }}
-        }}
-    }}
-
-    if ($Job.State -eq 'Failed' -or $Job.State -eq 'Stopped') {{
-        Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue
-        return [pscustomobject]@{{ complete = $true; failed = $true; rows = @(); message = 'Failed to load remaining ports.' }}
-    }}
-
-    return [pscustomobject]@{{ complete = $false; failed = $false; rows = @(); message = '' }}
-}}
-
-function global:__psPortPageCount {{
-    param(
-        [object[]]$Rows,
-        [int]$PageSize
-    )
-
-    if ($PageSize -lt 1) {{ return 1 }}
-    if ($null -eq $Rows -or $Rows.Count -eq 0) {{ return 1 }}
-
-    return [int][Math]::Ceiling($Rows.Count / [double]$PageSize)
-}}
-
-function global:__psClampPortPage {{
-    param(
-        [int]$Page,
-        [object[]]$Rows,
-        [int]$PageSize
-    )
-
-    $pageCount = __psPortPageCount $Rows $PageSize
-    return [Math]::Max(0, [Math]::Min($pageCount - 1, $Page))
-}}
-
-function global:__psPortMenuEntries {{
-    param(
-        [object[]]$Rows,
-        [int]$Page,
-        [int]$PageSize,
-        [bool]$FullReady
-    )
-
-    $entries = @()
-    $page = __psClampPortPage $Page $Rows $PageSize
-    $pageCount = __psPortPageCount $Rows $PageSize
-    $pageRows = @(@($Rows) | Select-Object -Skip ($page * $PageSize) -First $PageSize)
-
-    foreach ($row in $pageRows) {{
-        $entries += [pscustomobject]@{{
-            index = $entries.Count
-            kind = 'port'
-            label = "$($row.port)"
-            port = [int]$row.port
-            state = [string]$row.state
-            address = [string]$row.address
-            pid = [int]$row.pid
-            process = [string]$row.process
-            section = 'ports'
-        }}
-
-        $entries += [pscustomobject]@{{
-            index = $entries.Count
-            kind = 'kill'
-            label = 'Kill'
-            port = [int]$row.port
-            state = [string]$row.state
-            address = [string]$row.address
-            pid = [int]$row.pid
-            process = [string]$row.process
-            section = 'ports'
-        }}
-    }}
-
-    $entries += [pscustomobject]@{{
-        index = $entries.Count
-        kind = 'page-prev'
-        label = 'Prev'
-        enabled = ($page -gt 0)
-        target_page = [Math]::Max(0, $page - 1)
-        section = 'pages'
-    }}
-
-    $entries += [pscustomobject]@{{
-        index = $entries.Count
-        kind = 'page-next'
-        label = 'Next'
-        enabled = ($FullReady -and ($page + 1 -lt $pageCount))
-        target_page = [Math]::Min($pageCount - 1, $page + 1)
-        section = 'pages'
-    }}
-
-    return $entries
-}}
-
-function global:__psSamePortTarget {{
-    param(
-        [object]$Left,
-        [object]$Right
-    )
-
-    if ($null -eq $Left -or $null -eq $Right) {{ return $false }}
-
-    return (
-        [int]$Left.port -eq [int]$Right.port -and
-        [int]$Left.pid -eq [int]$Right.pid -and
-        [string]$Left.state -eq [string]$Right.state -and
-        [string]$Left.address -eq [string]$Right.address
-    )
-}}
-
-function global:__psPortIndexForKill {{
-    param(
-        [object[]]$Entries,
-        [object]$KillEntry
-    )
-
-    foreach ($entry in $Entries) {{
-        if ($entry.kind -eq 'port' -and (__psSamePortTarget $entry $KillEntry)) {{
-            return [int]$entry.index
-        }}
-    }}
-
-    return 0
-}}
-
-function global:__psKillIndexForPort {{
-    param(
-        [object[]]$Entries,
-        [object]$PortEntry
-    )
-
-    foreach ($entry in $Entries) {{
-        if ($entry.kind -eq 'kill' -and (__psSamePortTarget $entry $PortEntry)) {{
-            return [int]$entry.index
-        }}
-    }}
-
-    return [int]$PortEntry.index
-}}
-
-function global:__psPageNavIndex {{
-    param(
-        [object[]]$Entries,
-        [string]$Kind
-    )
-
-    foreach ($entry in $Entries) {{
-        if ($entry.kind -eq $Kind) {{
-            return [int]$entry.index
-        }}
-    }}
-
-    return 0
-}}
-
-function global:__psWritePortMenuRow {{
-    param(
-        [object]$Entry,
-        [object]$KillEntry,
-        [bool]$PortSelected,
-        [bool]$KillSelected
-    )
-
-    $killButtonWidth = 10
-    $processWidth = [Math]::Max(12, [Console]::BufferWidth - 55 - $killButtonWidth)
-    $address = __psClampMenuText ([string]$Entry.address) 22
-    $process = (__psClampMenuText ([string]$Entry.process) $processWidth).PadRight($processWidth)
-    $row = "{{0,6}} {{1,-13}} {{2,-22}} {{3}}" -f `
-        [string]$Entry.port,
-        (__psClampMenuText ([string]$Entry.state) 13),
-        $address,
-        $process
-
-    if ($PortSelected) {{
-        Write-Host $row -NoNewline -ForegroundColor Black -BackgroundColor Yellow
-    }} else {{
-        Write-Host $row -NoNewline
-    }}
-
-    Write-Host '  ' -NoNewline
-
-    if ($null -ne $KillEntry) {{
-        __psWritePathMenuButton $KillEntry $KillSelected
-    }}
-
-    Write-Host ''
-}}
-
-function global:__psWritePortNavButton {{
-    param(
-        [object]$Entry,
-        [bool]$Selected
-    )
-
-    $button = "[ $($Entry.label) ]"
-    $enabled = [bool]$Entry.enabled
-
-    if ($Selected -and $enabled) {{
-        Write-Host $button -NoNewline -ForegroundColor Black -BackgroundColor Yellow
-    }} elseif ($Selected) {{
-        Write-Host $button -NoNewline -ForegroundColor White -BackgroundColor DarkGray
-    }} elseif ($enabled) {{
-        Write-Host $button -NoNewline
-    }} else {{
-        Write-Host $button -NoNewline -ForegroundColor DarkGray
-    }}
-}}
-
-function global:__psRenderPortsMenu {{
-    param(
-        [object[]]$Entries,
-        [int]$Selected,
-        [int]$Top,
-        [int]$Height,
-        [string]$Status,
-        [int]$Page,
-        [int]$PageCount,
-        [bool]$Loading,
-        [object]$PortFilter = $null
-    )
-
-    __psClearMenuRegion $Top $Height
-
-    $portEntries = @($Entries | Where-Object {{ $_.kind -eq 'port' }})
-    $prevEntry = @($Entries | Where-Object {{ $_.kind -eq 'page-prev' }} | Select-Object -First 1)[0]
-    $nextEntry = @($Entries | Where-Object {{ $_.kind -eq 'page-next' }} | Select-Object -First 1)[0]
-
-    if ($null -ne $PortFilter) {{
-        Write-Host "Listening Ports: $PortFilter" -ForegroundColor DarkGray
-    }} else {{
-        Write-Host 'Listening Ports' -ForegroundColor DarkGray
-    }}
-    Write-Host ''
-
-    if ($portEntries.Count -eq 0) {{
-        if ($null -ne $PortFilter) {{
-            Write-Host "No listening TCP ports found for port $PortFilter." -ForegroundColor DarkGray
-        }} else {{
-            Write-Host 'No listening TCP ports found.' -ForegroundColor DarkGray
-        }}
-    }} else {{
-        Write-Host ('{{0,6}} {{1,-13}} {{2,-22}} {{3}}' -f 'Port', 'State', 'Address', 'Process') -ForegroundColor DarkGray
-
-        for ($index = 0; $index -lt $portEntries.Count; $index += 1) {{
-            $portEntry = $portEntries[$index]
-            $killEntry = @($Entries | Where-Object {{
-                $_.kind -eq 'kill' -and (__psSamePortTarget $_ $portEntry)
-            }} | Select-Object -First 1)[0]
-
-            __psWritePortMenuRow `
-                $portEntry `
-                $killEntry `
-                ([int]$portEntry.index -eq $Selected) `
-                ($null -ne $killEntry -and [int]$killEntry.index -eq $Selected)
-        }}
-    }}
-
-    Write-Host ''
-    if ($null -ne $prevEntry -and $null -ne $nextEntry) {{
-        __psWritePortNavButton $prevEntry ([int]$prevEntry.index -eq $Selected)
-        Write-Host "  Page $($Page + 1)/$PageCount  " -NoNewline -ForegroundColor DarkGray
-        __psWritePortNavButton $nextEntry ([int]$nextEntry.index -eq $Selected)
-
-        if ($Loading) {{
-            Write-Host '  loading remaining pages...' -NoNewline -ForegroundColor DarkGray
-        }}
-
-        Write-Host ''
-    }}
-
-    if (-not [string]::IsNullOrWhiteSpace($Status)) {{
-        if ($Status.StartsWith('Failed')) {{
-            Write-Host $Status -ForegroundColor Red
-        }} else {{
-            Write-Host $Status -ForegroundColor Green
-        }}
-    }}
-
-    Write-Host ''
-    Write-Host 'Use Up/Down. Right selects Kill or Next. Enter runs action. Esc closes.' -ForegroundColor DarkGray
-}}
-
-function global:__psKillPortProcess {{
-    param([object]$Entry)
-
-    $ownerProcessId = [int]$Entry.pid
-    if ($ownerProcessId -le 0) {{
-        return 'Failed to stop port process: invalid PID.'
-    }}
-
-    try {{
-        Stop-Process -Id $ownerProcessId -Force -ErrorAction Stop
-        return "Stopped $($Entry.process) on port $($Entry.port)."
-    }} catch {{
-        return "Failed to stop PID $ownerProcessId on port $($Entry.port): $($_.Exception.Message)"
-    }}
-}}
-
-function global:__psInvokePortsMenu {{
-    param([object]$Port = $null)
-
-    $pageSize = __psPortPageSize
-    $page = 0
-    $fullReady = ($null -ne $Port)
-    $backgroundJob = $null
-    $status = ''
-
-    if ($null -eq $Port) {{
-        $backgroundJob = __psStartPortsBackgroundJob
-        if ($null -eq $backgroundJob) {{
-            $fullReady = $true
-            $status = 'Background port loading is unavailable.'
-        }}
-    }}
-
-    $rows = @(__psPortRows $Port $pageSize)
-    $entries = @(__psPortMenuEntries $rows $page $pageSize $fullReady)
-
-    Write-Host ''
-    Write-Host ''
-
-    $selected = 0
-    $indexes = @(__psVerticalMenuIndexes $entries)
-    if ($indexes.Count -gt 0) {{ $selected = [int]$indexes[0] }}
-
-    $top = [Console]::CursorTop
-    $height = 30
-    $oldCursorVisible = $true
-
-    try {{
-        $oldCursorVisible = [Console]::CursorVisible
-        [Console]::CursorVisible = $false
-    }} catch {{ }}
-
-    try {{
-        while ($true) {{
-            if (-not $fullReady -and $null -ne $backgroundJob) {{
-                $jobResult = __psReceivePortsBackgroundJob $backgroundJob
-                if ([bool]$jobResult.complete) {{
-                    $backgroundJob = $null
-                    if (-not [bool]$jobResult.failed) {{
-                        $rows = @($jobResult.rows)
-                        $fullReady = $true
-                        $page = __psClampPortPage $page $rows $pageSize
-                        $entries = @(__psPortMenuEntries $rows $page $pageSize $fullReady)
-                    }} elseif (-not [string]::IsNullOrWhiteSpace([string]$jobResult.message)) {{
-                        $status = [string]$jobResult.message
-                    }}
-                }}
-            }}
-
-            $pageCount = __psPortPageCount $rows $pageSize
-            __psRenderPortsMenu $entries $selected $top $height $status $page $pageCount (-not $fullReady) $Port
-            $keyInfo = [Console]::ReadKey($true)
-
-            if (-not $fullReady -and $null -ne $backgroundJob) {{
-                $jobResult = __psReceivePortsBackgroundJob $backgroundJob
-                if ([bool]$jobResult.complete) {{
-                    $backgroundJob = $null
-                    if (-not [bool]$jobResult.failed) {{
-                        $rows = @($jobResult.rows)
-                        $fullReady = $true
-                        $page = __psClampPortPage $page $rows $pageSize
-                        $entries = @(__psPortMenuEntries $rows $page $pageSize $fullReady)
-                    }} elseif (-not [string]::IsNullOrWhiteSpace([string]$jobResult.message)) {{
-                        $status = [string]$jobResult.message
-                    }}
-                }}
-            }}
-
-            switch ($keyInfo.Key) {{
-                'UpArrow' {{
-                    if ($entries.Count -gt 0) {{
-                        $selected = __psMoveMenuSelectionVertical $entries $selected -1
-                    }}
-                    break
-                }}
-                'DownArrow' {{
-                    if ($entries.Count -gt 0) {{
-                        $selected = __psMoveMenuSelectionVertical $entries $selected 1
-                    }}
-                    break
-                }}
-                'LeftArrow' {{
-                    if ($entries.Count -gt 0 -and $entries[$selected].kind -eq 'kill') {{
-                        $selected = __psPortIndexForKill $entries $entries[$selected]
-                    }} elseif ($entries.Count -gt 0 -and $entries[$selected].kind -eq 'page-next') {{
-                        $selected = __psPageNavIndex $entries 'page-prev'
-                    }}
-                    break
-                }}
-                'RightArrow' {{
-                    if ($entries.Count -gt 0 -and $entries[$selected].kind -eq 'port') {{
-                        $selected = __psKillIndexForPort $entries $entries[$selected]
-                    }} elseif ($entries.Count -gt 0 -and $entries[$selected].kind -eq 'page-prev') {{
-                        $selected = __psPageNavIndex $entries 'page-next'
-                    }}
-                    break
-                }}
-                'Home' {{
-                    $indexes = @(__psVerticalMenuIndexes $entries)
-                    if ($indexes.Count -gt 0) {{ $selected = [int]$indexes[0] }}
-                    break
-                }}
-                'End' {{
-                    $indexes = @(__psVerticalMenuIndexes $entries)
-                    if ($indexes.Count -gt 0) {{ $selected = [int]$indexes[$indexes.Count - 1] }}
-                    break
-                }}
-                'Escape' {{
-                    __psClearMenuRegion $top $height
-                    return
-                }}
-                'Enter' {{
-                    if ($entries.Count -eq 0) {{ break }}
-
-                    $entry = $entries[$selected]
-                    if ($entry.kind -eq 'port') {{
-                        $selected = __psKillIndexForPort $entries $entry
-                        break
-                    }}
-
-                    if ($entry.kind -eq 'page-prev' -or $entry.kind -eq 'page-next') {{
-                        if (-not [bool]$entry.enabled) {{
-                            if (-not $fullReady) {{
-                                $status = 'Still loading remaining port pages.'
-                            }}
-                            break
-                        }}
-
-                        $page = [int]$entry.target_page
-                        $entries = @(__psPortMenuEntries $rows $page $pageSize $fullReady)
-                        $indexes = @(__psVerticalMenuIndexes $entries)
-                        if ($indexes.Count -gt 0) {{
-                            $selected = [int]$indexes[0]
-                        }} else {{
-                            $selected = 0
-                        }}
-                        $status = ''
-                        break
-                    }}
-
-                    if ($entry.kind -eq 'kill') {{
-                        $status = __psKillPortProcess $entry
-                        Start-Sleep -Milliseconds 250
-                        if ($null -ne $backgroundJob) {{
-                            Stop-Job -Job $backgroundJob -ErrorAction SilentlyContinue
-                            Remove-Job -Job $backgroundJob -Force -ErrorAction SilentlyContinue
-                            $backgroundJob = $null
-                        }}
-
-                        $fullReady = ($null -ne $Port)
-                        if ($null -eq $Port) {{
-                            $backgroundJob = __psStartPortsBackgroundJob
-                            if ($null -eq $backgroundJob) {{
-                                $fullReady = $true
-                            }}
-                        }}
-
-                        $rows = @(__psPortRows $Port $pageSize)
-                        $page = __psClampPortPage $page $rows $pageSize
-                        $entries = @(__psPortMenuEntries $rows $page $pageSize $fullReady)
-
-                        $indexes = @(__psVerticalMenuIndexes $entries)
-                        if ($indexes.Count -gt 0) {{
-                            $selected = [int]$indexes[0]
-                        }} else {{
-                            $selected = 0
-                        }}
-                    }}
-
-                    break
-                }}
-            }}
-        }}
-    }} finally {{
-        if ($null -ne $backgroundJob) {{
-            Stop-Job -Job $backgroundJob -ErrorAction SilentlyContinue
-            Remove-Job -Job $backgroundJob -Force -ErrorAction SilentlyContinue
-        }}
-
         try {{
             [Console]::CursorVisible = $oldCursorVisible
         }} catch {{ }}
@@ -2307,7 +1908,10 @@ try {{
 }} catch {{ }}
 
 try {{
-    __psMaybeRestoreSession
+    if (-not [bool]$global:PsSessionRestoreAttempted) {{
+        $global:PsSessionRestoreAttempted = $true
+        __psMaybeRestoreSession
+    }}
 }} catch {{
     Write-Warning "ps session restore failed: $($_.Exception.Message)"
 }}
@@ -2349,22 +1953,17 @@ function global:ports {{
         [object[]]$Arguments
     )
 
-    if ($null -ne $Arguments -and $Arguments.Count -gt 0) {{
-        Write-Error 'Usage: ports or ports -p <port>'
-        return
-    }}
+    $__psPortsArgs = @('ports')
 
     if ($PSBoundParameters.ContainsKey('Port')) {{
-        if ($Port -lt 1 -or $Port -gt 65535) {{
-            Write-Error 'Port must be between 1 and 65535.'
-            return
-        }}
-
-        __psInvokePortsMenu -Port $Port
-        return
+        $__psPortsArgs += @('-p', [string]$Port)
     }}
 
-    __psInvokePortsMenu
+    if ($null -ne $Arguments -and $Arguments.Count -gt 0) {{
+        $__psPortsArgs += $Arguments
+    }}
+
+    & $script:PsCliPath @__psPortsArgs
 }}
 
 try {{
@@ -2563,8 +2162,12 @@ mod tests {
         assert!(block.contains("function global:__psInvokeShortcut"));
         assert!(block.contains("function global:__psInvokePathMenu"));
         assert!(block.contains("function global:__psRenderPathMenu"));
+        assert!(block.contains("function global:__psRenderPathSelectionChange"));
         assert!(block.contains("function global:__psInvokeSettingsMenu"));
         assert!(block.contains("function global:__psRenderSettingsMenu"));
+        assert!(block.contains("function global:__psRenderSettingsSelectionChange"));
+        assert!(block.contains("function global:__psClearMenuLine"));
+        assert!(block.contains("function global:__psRenderConfirmButtonLine"));
         assert!(block.contains("function global:__psToggleSetting"));
         assert!(block.contains("function global:__psAdjustSetting"));
         assert!(block.contains("function global:__psSetNumericSetting"));
@@ -2590,38 +2193,30 @@ mod tests {
         assert!(block.contains("function global:__psConfirmDeleteSavedPath"));
         assert!(block.contains("function global:__psIsDestructiveMenuItem"));
         assert!(block.contains("function global:__psMoveMenuSelectionVertical"));
-        assert!(block.contains("function global:__psPortPageSize"));
-        assert!(block.contains("function global:__psPortRowsFromConnections"));
-        assert!(block.contains("function global:__psStartPortsBackgroundJob"));
-        assert!(block.contains("function global:__psReceivePortsBackgroundJob"));
-        assert!(block.contains("function global:__psPortMenuEntries"));
-        assert!(block.contains("function global:__psRenderPortsMenu"));
-        assert!(block.contains("function global:__psInvokePortsMenu"));
+        assert!(block.contains("$oldSelected = $selected"));
+        assert!(
+            block.contains("__psRenderPathSelectionChange $entries $oldSelected $selected $top")
+        );
+        assert!(block.contains(
+            "__psRenderSettingsSelectionChange $entries $settings $oldSelected $selected $top"
+        ));
         assert!(block.contains("function global:ports"));
         assert!(block.contains("section = 'paths'"));
         assert!(block.contains("section = 'actions'"));
         assert!(block.contains("kind = 'delete'"));
-        assert!(block.contains("kind = 'kill'"));
-        assert!(block.contains("kind = 'page-prev'"));
-        assert!(block.contains("kind = 'page-next'"));
         assert!(block.contains("label = 'Clear saved paths'"));
         assert!(block.contains("label = 'Delete'"));
-        assert!(block.contains("label = 'Kill'"));
         assert!(block.contains("BackgroundColor DarkRed"));
         assert!(block.contains("ForegroundColor Red"));
         assert!(block.contains("Write-Host 'Delete saved path?' -ForegroundColor Red"));
         assert!(block.contains("Write-Host \"Deleted saved path: $clean\" -ForegroundColor Red"));
-        assert!(block.contains("Get-NetTCPConnection -State Listen -ErrorAction Stop"));
-        assert!(block.contains("Write-Host 'Listening Ports'"));
-        assert!(block.contains("loading remaining pages..."));
-        assert!(block.contains("Page $($Page + 1)/$PageCount"));
-        assert!(block.contains("Stop-Process -Id $ownerProcessId -Force"));
         assert!(block.contains("Remove-Item Alias:ports"));
-        assert!(block.contains("__psInvokePortsMenu"));
         assert!(block.contains("[Alias('p')]"));
-        assert!(block.contains("Usage: ports or ports -p <port>"));
-        assert!(block.contains("Port must be between 1 and 65535."));
-        assert!(block.contains("__psInvokePortsMenu -Port $Port"));
+        assert!(block.contains("$__psPortsArgs = @('ports')"));
+        assert!(block.contains("$__psPortsArgs += @('-p', [string]$Port)"));
+        assert!(block.contains("& $script:PsCliPath @__psPortsArgs"));
+        assert!(!block.contains("function global:__psInvokePortsMenu"));
+        assert!(!block.contains("Get-NetTCPConnection -State Listen"));
         assert!(block.contains("$script:PsPathsPath"));
         assert!(block.contains("$script:PsSettingsPath"));
         assert!(block.contains("short_pwd = $false"));
@@ -2661,6 +2256,17 @@ mod tests {
         assert!(block.contains("Get-Process -Id $sessionPid"));
         assert!(block.contains("$processStartedAt -gt $sessionUpdatedAt"));
         assert!(block.contains("PS_SKIP_SESSION_RESTORE"));
+        assert!(block.contains("$escapedProfile = ([string]$PROFILE).Replace"));
+        assert!(block.contains("$command = \"`$env:PS_SKIP_SESSION_RESTORE = '1';"));
+        assert!(block.contains("$arguments = @('-NoExit', '-NoProfile', '-Command', $command)"));
+        assert!(
+            block
+                .contains("Start-Process wt.exe -ArgumentList (@('new-tab', $shell) + $arguments)")
+        );
+        assert!(block.contains("Start-Process -FilePath $shell -ArgumentList $arguments"));
+        assert!(!block.contains("cmd.exe"));
+        assert!(block.contains("if (-not [bool]$global:PsSessionRestoreAttempted)"));
+        assert!(block.contains("$global:PsSessionRestoreAttempted = $true"));
         assert!(block.contains("__psRecordTerminalHistory $__psTrimmed"));
         assert!(block.contains("__psMaybeRestoreSession"));
         assert!(!block.contains(".session-restore-stamp"));
