@@ -3,6 +3,7 @@ mod doctor;
 mod editor;
 mod envs;
 mod history;
+mod loading;
 mod menu;
 mod path_menu;
 mod picker;

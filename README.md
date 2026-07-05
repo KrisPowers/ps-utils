@@ -66,6 +66,7 @@ Other built-in prefixless utilities:
 doctor
 procs
 processes
+procs -t "project"
 history
 envs
 reload
@@ -74,10 +75,11 @@ mkcd scratch
 
 `doctor` checks the profile bridge, managed config files, saved paths, PATH, and
 history/session storage. `procs` and `processes` open a process menu with a kill
-action. `history` opens saved terminal history and runs the selected command in
-the current shell. `envs` opens an environment variable browser. `reload`
-validates and dot-sources `$PROFILE`. `mkcd` creates a directory and moves into
-it.
+action. Use `procs -n <name>` to filter by process name or path, and
+`procs -t <title>` to filter by the title/name text shown in the menu. `history` opens saved terminal
+history and runs the selected command in the current shell. `envs` opens an
+environment variable browser. `reload` validates and dot-sources `$PROFILE`.
+`mkcd` creates a directory and moves into it.
 
 ## Saved Paths
 

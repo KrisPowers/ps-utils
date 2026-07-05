@@ -19,11 +19,12 @@ use crossterm::{
 };
 use sysinfo::{Pid, System};
 
+use crate::loading;
+
 const PAGE_SIZE: usize = 20;
 const PAGE_SIZE_U16: u16 = 20;
 const MENU_HEIGHT: u16 = 29;
 const ROW_START: u16 = 3;
-const LOADING_FRAMES: [&str; 6] = ["[.  ]", "[.. ]", "[...]", "[.. ]", "[.  ]", "[   ]"];
 
 #[derive(Debug, Args)]
 pub struct PortsArgs {
@@ -751,41 +752,11 @@ fn render_loading_shell(stdout: &mut std::io::Stdout, top: u16, query: &PortQuer
     clear_region(stdout, top)?;
 
     let title = ports_title(query);
-
-    queue!(
-        stdout,
-        MoveTo(0, top),
-        SetForegroundColor(Color::DarkGrey),
-        Print(title),
-        ResetColor,
-        MoveTo(0, top + 4),
-        SetForegroundColor(Color::DarkGrey),
-        Print("Preparing the first page."),
-        ResetColor
-    )?;
-
-    stdout
-        .flush()
-        .context("failed to render ports loading state")
+    loading::render_shell(stdout, top, &title, "Preparing the first page.")
 }
 
 fn render_loading_frame(stdout: &mut std::io::Stdout, top: u16, frame: usize) -> Result<()> {
-    queue!(
-        stdout,
-        MoveTo(0, top + 2),
-        Clear(ClearType::CurrentLine),
-        SetForegroundColor(Color::Yellow),
-        Print(format!("Loading TCP ports {}", loading_frame(frame))),
-        ResetColor
-    )?;
-
-    stdout
-        .flush()
-        .context("failed to render ports loading frame")
-}
-
-fn loading_frame(frame: usize) -> &'static str {
-    LOADING_FRAMES[frame % LOADING_FRAMES.len()]
+    loading::render_frame(stdout, top, "Loading TCP ports", frame)
 }
 
 fn render_full(stdout: &mut std::io::Stdout, top: u16, menu: &PortsMenu) -> Result<()> {
@@ -1307,9 +1278,9 @@ mod tests {
 
     #[test]
     fn loading_frame_cycles() {
-        assert_eq!(loading_frame(0), "[.  ]");
-        assert_eq!(loading_frame(1), "[.. ]");
-        assert_eq!(loading_frame(2), "[...]");
-        assert_eq!(loading_frame(6), "[.  ]");
+        assert_eq!(loading::frame(0), "[.  ]");
+        assert_eq!(loading::frame(1), "[.. ]");
+        assert_eq!(loading::frame(2), "[...]");
+        assert_eq!(loading::frame(6), "[.  ]");
     }
 }
