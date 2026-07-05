@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn validates_shortcut_names() {
-        assert!(valid_shortcut_name("homebase"));
+        assert!(valid_shortcut_name("workbench"));
         assert!(valid_shortcut_name("open-api"));
         assert!(valid_shortcut_name("_secret"));
         assert!(!valid_shortcut_name(""));

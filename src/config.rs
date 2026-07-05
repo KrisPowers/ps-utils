@@ -36,18 +36,6 @@ impl CommandsConfig {
         );
 
         commands.insert(
-            "homebase".to_string(),
-            ShortcutCommand::Workspace {
-                description: Some("Move this shell to your home folder.".to_string()),
-                path: home_dir()
-                    .unwrap_or_else(|| PathBuf::from("C:\\"))
-                    .display()
-                    .to_string(),
-                open_windows: Vec::new(),
-            },
-        );
-
-        commands.insert(
             "repo".to_string(),
             ShortcutCommand::Shell {
                 description: Some("Example custom script. Replace this with your own.".to_string()),

@@ -2382,6 +2382,6 @@ mod tests {
         assert!(!block.contains("$Host.UI.RawUI 'BackgroundColor'"));
         assert!(block.contains("Remove-Item Alias:ps"));
         assert!(!block.contains("@args | Invoke-Expression"));
-        assert!(crate::shortcut::valid_shortcut_name("homebase"));
+        assert!(crate::shortcut::valid_shortcut_name("workbench"));
     }
 }

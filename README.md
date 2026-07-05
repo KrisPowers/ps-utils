@@ -41,7 +41,6 @@ prefix:
 
 ```powershell
 kill 3000
-homebase
 ```
 
 `ports` is also available without the `ps` prefix. It opens an interactive menu
