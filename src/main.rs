@@ -11,6 +11,7 @@ mod ports;
 mod procs;
 mod profile;
 mod shortcut;
+mod workspaces;
 
 use std::{fs, path::PathBuf};
 
@@ -62,6 +63,9 @@ enum Command {
 
     /// Open the environment variables menu.
     Envs(envs::EnvsArgs),
+
+    /// Manage and launch saved workspaces.
+    Workspaces(workspaces::WorkspacesArgs),
 
     /// Run a shortcut in a child process.
     Run {
@@ -116,6 +120,7 @@ enum ConfigPathArg {
     Commands,
     Paths,
     Settings,
+    Workspaces,
     Dir,
 }
 
@@ -134,6 +139,7 @@ fn main() -> Result<()> {
         Command::Procs(args) => procs::run(args),
         Command::History(args) => history::run(args),
         Command::Envs(args) => envs::run(args),
+        Command::Workspaces(args) => workspaces::run(args),
         Command::Run { name, args } => shortcut::run(&name, &args),
         Command::Emit { name, args } => {
             println!("{}", shortcut::emit(&name, &args)?);
@@ -182,6 +188,7 @@ fn open_config(file: ConfigFile, args: OpenConfigArgs) -> Result<()> {
         ConfigFile::Commands => config::ensure_commands_config()?,
         ConfigFile::Paths => config::ensure_paths_config()?,
         ConfigFile::Settings => config::ensure_settings_config()?,
+        ConfigFile::Workspaces => config::ensure_workspaces_config()?,
         ConfigFile::Dir => config_path(ConfigFile::Dir),
     };
 
@@ -206,6 +213,7 @@ impl From<ConfigPathArg> for ConfigFile {
             ConfigPathArg::Commands => ConfigFile::Commands,
             ConfigPathArg::Paths => ConfigFile::Paths,
             ConfigPathArg::Settings => ConfigFile::Settings,
+            ConfigPathArg::Workspaces => ConfigFile::Workspaces,
             ConfigPathArg::Dir => ConfigFile::Dir,
         }
     }

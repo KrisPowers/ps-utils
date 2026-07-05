@@ -1966,7 +1966,7 @@ function global:ports {{
     & $script:PsCliPath @__psPortsArgs
 }}
 
-foreach ($__psUtilityAlias in @('doctor', 'procs', 'processes', 'history', 'envs', 'reload', 'mkcd')) {{
+foreach ($__psUtilityAlias in @('doctor', 'procs', 'processes', 'history', 'envs', 'workspaces', 'reload', 'mkcd')) {{
     if (Test-Path -LiteralPath "Alias:$__psUtilityAlias") {{
         Remove-Item -LiteralPath "Alias:$__psUtilityAlias" -Force -ErrorAction SilentlyContinue
     }}
@@ -1986,6 +1986,28 @@ function global:processes {{
 
 function global:envs {{
     & $script:PsCliPath envs @args
+}}
+
+function global:workspaces {{
+    $resultPath = Join-Path ([IO.Path]::GetTempPath()) "ps-workspaces-$PID-$([Guid]::NewGuid().ToString('N')).ps1"
+
+    try {{
+        & $script:PsCliPath workspaces --result $resultPath @args
+        $__psWorkspacesExitCode = $LASTEXITCODE
+        $global:LASTEXITCODE = $__psWorkspacesExitCode
+
+        if ($__psWorkspacesExitCode -ne 0) {{ return }}
+        if (-not (Test-Path -LiteralPath $resultPath)) {{ return }}
+
+        $scriptText = Get-Content -LiteralPath $resultPath -Raw
+        if (-not [string]::IsNullOrWhiteSpace($scriptText)) {{
+            Invoke-Expression $scriptText
+        }}
+    }} finally {{
+        if (Test-Path -LiteralPath $resultPath) {{
+            Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+        }}
+    }}
 }}
 
 function global:history {{
@@ -2277,11 +2299,14 @@ mod tests {
         assert!(block.contains("function global:processes"));
         assert!(block.contains("function global:history"));
         assert!(block.contains("function global:envs"));
+        assert!(block.contains("function global:workspaces"));
         assert!(block.contains("function global:reload"));
         assert!(block.contains("function global:mkcd"));
         assert!(block.contains("Remove-Item -LiteralPath \"Alias:$__psUtilityAlias\""));
         assert!(block.contains("& $script:PsCliPath history --result $resultPath @args"));
+        assert!(block.contains("& $script:PsCliPath workspaces --result $resultPath @args"));
         assert!(block.contains("Invoke-Expression $command"));
+        assert!(block.contains("Invoke-Expression $scriptText"));
         assert!(block.contains("ParseFile($PROFILE, [ref]$tokens, [ref]$errors)"));
         assert!(block.contains("Set-Location -LiteralPath $Path"));
         assert!(block.contains("section = 'paths'"));

@@ -14,6 +14,7 @@ pub enum ConfigFile {
     Commands,
     Paths,
     Settings,
+    Workspaces,
     Dir,
 }
 
@@ -96,6 +97,7 @@ pub fn config_path(file: ConfigFile) -> PathBuf {
         ConfigFile::Commands => config_dir().join("commands.json"),
         ConfigFile::Paths => config_dir().join("paths.json"),
         ConfigFile::Settings => config_dir().join("settings.json"),
+        ConfigFile::Workspaces => config_dir().join("workspaces.json"),
         ConfigFile::Dir => config_dir(),
     }
 }
@@ -104,6 +106,7 @@ pub fn ensure_all() -> Result<()> {
     ensure_commands_config()?;
     ensure_paths_config()?;
     ensure_settings_config()?;
+    ensure_workspaces_config()?;
     Ok(())
 }
 
@@ -199,6 +202,18 @@ pub fn load_settings_config() -> Result<SettingsConfig> {
         .with_context(|| format!("failed to read settings config at {}", path.display()))?;
     serde_json::from_str(strip_utf8_bom(&raw))
         .with_context(|| format!("failed to parse settings config at {}", path.display()))
+}
+
+pub fn ensure_workspaces_config() -> Result<PathBuf> {
+    let path = config_path(ConfigFile::Workspaces);
+    ensure_json_file(
+        &path,
+        &serde_json::json!({
+            "version": 1,
+            "workspaces": []
+        }),
+    )?;
+    Ok(path)
 }
 
 pub fn load_commands() -> Result<CommandsConfig> {

@@ -1,6 +1,6 @@
 use std::{env, fs, path::Path, path::PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::{
     config,
@@ -85,6 +85,21 @@ fn check_configs() -> Vec<Check> {
         Ok(_) => ok("settings.json", "valid"),
         Err(error) => check_error("settings.json", error.to_string()),
     });
+
+    checks.push(
+        match config::ensure_workspaces_config().and_then(|path| {
+            let raw = std::fs::read_to_string(&path).with_context(|| {
+                format!("failed to read workspaces config at {}", path.display())
+            })?;
+            let value = serde_json::from_str::<serde_json::Value>(&raw).with_context(|| {
+                format!("failed to parse workspaces config at {}", path.display())
+            })?;
+            Ok(value)
+        }) {
+            Ok(_) => ok("workspaces.json", "valid"),
+            Err(error) => check_error("workspaces.json", error.to_string()),
+        },
+    );
 
     checks
 }

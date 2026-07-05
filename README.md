@@ -33,6 +33,7 @@ the user `Path`, and runs `ps init`.
 ps init
 ps commands
 ps config-path settings
+ps config-path workspaces
 ps run kill 3000
 ```
 
@@ -66,6 +67,7 @@ doctor
 procs
 processes
 procs -t "project"
+workspaces
 history
 envs
 reload
@@ -79,6 +81,46 @@ action. Use `procs -n <name>` to filter by process name or path, and
 history and runs the selected command in the current shell. `envs` opens an
 environment variable browser. `reload` validates and dot-sources `$PROFILE`.
 `mkcd` creates a directory and moves into it.
+
+## Workspaces
+
+Workspaces are named launch targets stored in:
+
+```text
+%APPDATA%\ps\workspaces.json
+```
+
+Add or update a workspace from the current directory:
+
+```powershell
+ps workspaces add api
+```
+
+Add a workspace with an explicit root path and extra paths to open in additional
+PowerShell windows:
+
+```powershell
+ps workspaces add suite `
+  --path C:\Users\krisp\OneDrive\Documents\GitHub `
+  --open C:\Users\krisp\OneDrive\Documents\GitHub\api `
+  --open C:\Users\krisp\OneDrive\Documents\GitHub\web
+```
+
+Launch a workspace in the current shell after the profile bridge is loaded:
+
+```powershell
+workspaces
+workspaces open suite
+```
+
+The bare `workspaces` command opens a menu sorted by most recent access.
+`workspaces open <name>` changes the current shell to the workspace path and
+opens any configured extra paths in new PowerShell windows. You can also run:
+
+```powershell
+ps workspaces list
+ps workspaces remove suite
+```
 
 ## Saved Paths
 
