@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ([string]::IsNullOrWhiteSpace($Repo)) {
-    $Repo = "https://github.com/krispowers/ps"
+    $Repo = "https://github.com/KrisPowers/ps-utils"
 }
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
@@ -127,4 +127,3 @@ if (-not $NoProfile) {
 Write-Host ""
 Write-Host "Installed ps to $ExePath"
 Write-Host "Restart PowerShell or run: . `$PROFILE"
-

@@ -471,7 +471,7 @@ function global:__psLoadSessionsConfig {{
     }}
 
     try {{
-        $raw = Get-Content -LiteralPath $script:PsSessionsPath -Raw
+        $raw = Get-Content -LiteralPath $script:PsSessionsPath -Raw -ErrorAction Stop
         if ([string]::IsNullOrWhiteSpace($raw)) {{
             return (__psEmptySessionsConfig)
         }}
@@ -498,7 +498,9 @@ function global:__psSaveSessionsConfig {{
         sessions = @($Sessions)
     }}
 
-    $payload | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $script:PsSessionsPath -Encoding UTF8
+    try {{
+        $payload | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $script:PsSessionsPath -Encoding UTF8 -ErrorAction Stop
+    }} catch {{ }}
 }}
 
 function global:__psProcessStartUnixSeconds {{
@@ -516,7 +518,7 @@ function global:__psProcessStartUnixSeconds {{
 
 function global:__psUpdateSessionSnapshot {{
     $settings = __psLoadSettingsConfig
-    if (-not [bool]$settings.session_history) {{ return }}
+    $restoreEnabled = [bool]$settings.session_history
 
     $currentPath = __psGetCurrentPath
     if ([string]::IsNullOrWhiteSpace($currentPath)) {{ return }}
@@ -538,6 +540,7 @@ function global:__psUpdateSessionSnapshot {{
         status = 'open'
         closed_at = 0
         restored_at = 0
+        restore_enabled = $restoreEnabled
         host = [string]$Host.Name
     }}
 
@@ -550,7 +553,7 @@ function global:__psUpdateSessionSnapshot {{
 
 function global:__psMarkSessionClosed {{
     $settings = __psLoadSettingsConfig
-    if (-not [bool]$settings.session_history) {{ return }}
+    $restoreEnabled = [bool]$settings.session_history
 
     $currentPath = __psGetCurrentPath
     if ([string]::IsNullOrWhiteSpace($currentPath)) {{ return }}
@@ -572,6 +575,7 @@ function global:__psMarkSessionClosed {{
         status = 'closed'
         closed_at = $now
         restored_at = 0
+        restore_enabled = $restoreEnabled
         host = [string]$Host.Name
     }}
 
@@ -583,6 +587,10 @@ function global:__psSessionCanRestore {{
 
     if ($null -eq $Session) {{ return $false }}
     if ([string]::IsNullOrWhiteSpace([string]$Session.path)) {{ return $false }}
+
+    if ($null -ne $Session.PSObject.Properties['restore_enabled'] -and -not [bool]$Session.restore_enabled) {{
+        return $false
+    }}
 
     $status = [string]$Session.status
     if ($status -eq 'closed' -or [string]::IsNullOrWhiteSpace($status)) {{
