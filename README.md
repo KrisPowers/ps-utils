@@ -1,7 +1,7 @@
 # PowerShell Utilities
 
 PowerShell Utilities is a fast, Rust-built toolkit for everyday PowerShell
-work. The command stays short—`ps`—and adds interactive tools for ports,
+work. The command stays short (`ps`) and adds interactive tools for ports,
 processes, saved paths, workspaces, history, environment variables, and custom
 shortcuts.
 
