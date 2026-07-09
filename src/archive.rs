@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Seek, Write},
+    io::{self, IsTerminal, Seek, Write, stdout},
     path::{Component, Path, PathBuf},
     process,
     time::{SystemTime, UNIX_EPOCH},
@@ -9,6 +9,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use clap::Args;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+use crate::loading;
 
 #[derive(Debug, Args)]
 pub struct ArchiveArgs {
@@ -21,7 +23,11 @@ pub fn run(args: ArchiveArgs) -> Result<()> {
     let source = args
         .path
         .unwrap_or(std::env::current_dir().context("failed to resolve current directory")?);
-    let destination = archive_path(&source)?;
+    let destination = if stdout().is_terminal() {
+        loading::run_with_spinner("Creating zip archive", move || archive_path(&source))?
+    } else {
+        archive_path(&source)?
+    };
 
     println!("Created {}", destination.display());
     Ok(())

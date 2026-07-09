@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use crossterm::{
-    cursor::{Hide, MoveTo, Show, position},
+    cursor::{Hide, MoveTo, MoveToColumn, Show, position},
     event::{Event, KeyCode, KeyEventKind, KeyModifiers, poll, read},
     execute, queue,
     style::{Color, Print, ResetColor, SetForegroundColor},
@@ -84,6 +84,39 @@ where
     }
 }
 
+pub fn run_with_spinner<T, F>(loading_text: &str, load: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let mut stdout = stdout();
+    let _guard = CursorGuard::enter(&mut stdout).ok();
+    let (sender, receiver) = mpsc::channel();
+    let _loader = thread::spawn(move || {
+        let _ = sender.send(load());
+    });
+
+    let mut frame = 0usize;
+    loop {
+        let _ = render_inline_frame(&mut stdout, loading_text, frame);
+
+        match receiver.try_recv() {
+            Ok(result) => {
+                let _ = clear_current_line(&mut stdout);
+                return result;
+            }
+            Err(TryRecvError::Disconnected) => {
+                let _ = clear_current_line(&mut stdout);
+                bail!("failed to finish operation");
+            }
+            Err(TryRecvError::Empty) => {}
+        }
+
+        frame = frame.wrapping_add(1);
+        thread::sleep(Duration::from_millis(140));
+    }
+}
+
 pub fn render_shell(
     stdout: &mut std::io::Stdout,
     top: u16,
@@ -123,6 +156,23 @@ pub fn render_frame(
     stdout.flush().context("failed to render loading frame")
 }
 
+fn render_inline_frame(
+    stdout: &mut std::io::Stdout,
+    loading_text: &str,
+    frame_index: usize,
+) -> Result<()> {
+    queue!(
+        stdout,
+        MoveToColumn(0),
+        Clear(ClearType::CurrentLine),
+        SetForegroundColor(Color::Yellow),
+        Print(format!("{loading_text} {}", frame(frame_index))),
+        ResetColor
+    )?;
+
+    stdout.flush().context("failed to render loading frame")
+}
+
 pub fn clear_region(stdout: &mut std::io::Stdout, top: u16, height: u16) -> Result<()> {
     for offset in 0..height {
         queue!(
@@ -138,6 +188,26 @@ pub fn clear_region(stdout: &mut std::io::Stdout, top: u16, height: u16) -> Resu
 
 pub fn frame(frame_index: usize) -> &'static str {
     LOADING_FRAMES[frame_index % LOADING_FRAMES.len()]
+}
+
+fn clear_current_line(stdout: &mut std::io::Stdout) -> Result<()> {
+    queue!(stdout, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
+    stdout.flush().context("failed to clear loading line")
+}
+
+struct CursorGuard;
+
+impl CursorGuard {
+    fn enter(stdout: &mut std::io::Stdout) -> Result<Self> {
+        execute!(stdout, Hide).context("failed to prepare terminal")?;
+        Ok(Self)
+    }
+}
+
+impl Drop for CursorGuard {
+    fn drop(&mut self) {
+        let _ = execute!(stdout(), Show);
+    }
 }
 
 struct TerminalGuard;
