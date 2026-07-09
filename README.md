@@ -42,6 +42,9 @@ procs                  # Browse and stop processes
 history                # Search saved command history
 envs                   # Browse environment variables
 workspaces             # Save or open a multi-tab workspace
+zip                    # Zip the current directory into a new archive inside it
+compress               # Same as zip
+pack                   # Same as zip
 @                      # Save, open, or remove favorite paths
 %                      # Change ps settings
 mkcd scratch           # Create a directory and enter it
@@ -55,6 +58,7 @@ ps ports -p 3000
 ps procs -n node
 ps history -q cargo
 ps envs -q path
+ps zip
 ps --help
 ```
 
@@ -106,6 +110,18 @@ ps workspaces add suite `
 
 ps workspaces list
 ps workspaces remove suite
+```
+
+### Archive current directory
+
+Run `zip`, `compress`, or `pack` to create a `.zip` archive of the current
+directory's contents. The archive is placed in that same directory and existing
+files are never overwritten.
+
+```powershell
+zip
+compress
+pack
 ```
 
 ### Saved paths and settings
@@ -174,6 +190,7 @@ numbers, underscores, and hyphens.
 | --- | --- |
 | `ps init` | Install or refresh the managed profile bridge |
 | `ps doctor` | Check profiles, config, `PATH`, history, and session storage |
+| `ps zip` | Zip the current directory into a new archive inside it |
 | `ps ports` | Browse and filter TCP connections |
 | `ps procs` | Browse and filter processes |
 | `ps history` | Search saved terminal history |

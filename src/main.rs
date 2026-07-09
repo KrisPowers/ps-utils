@@ -1,3 +1,4 @@
+mod archive;
 mod config;
 mod doctor;
 mod editor;
@@ -53,6 +54,10 @@ enum Command {
 
     /// Run health checks for the ps installation.
     Doctor,
+
+    /// Zip the current directory into a new archive inside it.
+    #[command(alias = "compress", alias = "pack")]
+    Zip(archive::ArchiveArgs),
 
     /// Open the interactive process menu.
     #[command(alias = "processes")]
@@ -136,6 +141,7 @@ fn main() -> Result<()> {
         }
         Command::Ports(args) => ports::run(args),
         Command::Doctor => doctor::run(),
+        Command::Zip(args) => archive::run(args),
         Command::Procs(args) => procs::run(args),
         Command::History(args) => history::run(args),
         Command::Envs(args) => envs::run(args),
