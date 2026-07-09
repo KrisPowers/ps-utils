@@ -16,16 +16,22 @@ The prebuilt release supports 64-bit Windows. From PowerShell:
 curl.exe -fsSL https://raw.githubusercontent.com/KrisPowers/ps-utils/main/scripts/install.ps1 | powershell -NoProfile -ExecutionPolicy Bypass -
 ```
 
-Restart PowerShell, or load the updated profile immediately:
+Restart PowerShell, or load the command module and profile hooks immediately:
 
 ```powershell
+Import-Module PsUtils -Force
 . $PROFILE
 ps doctor
 ```
 
 The installer places `ps.exe` in `%LOCALAPPDATA%\ps\bin`, adds that directory to
-your user `PATH`, and configures both PowerShell 7 and Windows PowerShell
-profiles. It installs the latest release by default. To pin a release:
+your user `PATH`, installs an autoloadable PowerShell command module, and
+configures both PowerShell 7 and Windows PowerShell profiles. The command module
+provides commands like `ports`, `workspaces`, `mkcd`, and custom shortcuts
+without depending on profile loading. The profile bridge is still used for
+prompt display, `@`, `%`, terminal history capture, and session restore.
+
+It installs the latest release by default. To pin a release:
 
 ```powershell
 $env:PS_INSTALL_VERSION = "v0.1.0"
@@ -146,10 +152,11 @@ Open the shortcut configuration:
 ps commands
 ```
 
-Reload the profile after editing it:
+Refresh the command module after editing it:
 
 ```powershell
-reload
+ps install-commands
+Import-Module PsUtils -Force
 ```
 
 Three shortcut types are supported:
@@ -158,7 +165,7 @@ Three shortcut types are supported:
 {
   "version": 1,
   "commands": {
-    "kill": {
+    "kill-port": {
       "type": "kill-port",
       "description": "Stop the process listening on a TCP port."
     },
@@ -182,13 +189,16 @@ as `$psArgs`. A shell shortcut can also use `script_path` and optionally set
 `dot_source` to `false`.
 
 Shortcut names must start with a letter or underscore and may contain letters,
-numbers, underscores, and hyphens.
+numbers, underscores, and hyphens. Prefer names that do not already exist as
+PowerShell aliases or commands; existing aliases are resolved before autoloaded
+module commands.
 
 ## Command reference
 
 | Command | Purpose |
 | --- | --- |
-| `ps init` | Install or refresh the managed profile bridge |
+| `ps init` | Install or refresh the command module and managed profile bridge |
+| `ps install-commands` | Install or refresh profile-independent PowerShell commands |
 | `ps doctor` | Check profiles, config, `PATH`, history, and session storage |
 | `ps zip` | Zip the current directory into a new archive inside it |
 | `ps ports` | Browse and filter TCP connections |
@@ -212,6 +222,7 @@ Set-Location ps-utils
 cargo test
 cargo build --release
 .\target\release\ps.exe init --yes
+Import-Module PsUtils -Force
 . $PROFILE
 ```
 
