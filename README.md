@@ -34,7 +34,7 @@ prompt display, `@`, `%`, terminal history capture, and session restore.
 It installs the latest release by default. To pin a release:
 
 ```powershell
-$env:PS_INSTALL_VERSION = "v0.1.0"
+$env:PS_INSTALL_VERSION = "v0.1.1"
 curl.exe -fsSL https://raw.githubusercontent.com/KrisPowers/ps-utils/main/scripts/install.ps1 | powershell -NoProfile -ExecutionPolicy Bypass -
 ```
 
