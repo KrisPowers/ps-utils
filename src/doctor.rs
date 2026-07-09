@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use crate::{
     config,
     profile::{self, ShellTarget},
+    shell_module,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +27,7 @@ pub fn run() -> Result<()> {
 
     checks.push(check_config_dir());
     checks.extend(check_configs());
+    checks.extend(check_command_modules());
     checks.extend(check_profiles());
     checks.push(check_path());
     checks.extend(check_saved_paths());
@@ -127,6 +129,30 @@ fn check_profiles() -> Vec<Check> {
                 warn("profile bridge", format!("missing {}", path.display()))
             }
             Err(error) => check_error("profile bridge", format!("{}: {error}", path.display())),
+        })
+        .collect()
+}
+
+fn check_command_modules() -> Vec<Check> {
+    let modules = match shell_module::module_dirs(ShellTarget::All) {
+        Ok(modules) => modules,
+        Err(error) => return vec![check_error("command module", error.to_string())],
+    };
+
+    modules
+        .into_iter()
+        .map(|dir| {
+            let manifest = dir.join("PsUtils.psd1");
+            let module = dir.join("PsUtils.psm1");
+
+            if manifest.exists() && module.exists() {
+                ok("command module", dir.display().to_string())
+            } else {
+                warn(
+                    "command module",
+                    format!("missing module files in {}", dir.display()),
+                )
+            }
         })
         .collect()
 }

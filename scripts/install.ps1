@@ -120,10 +120,15 @@ if (-not (Test-Path -LiteralPath $ExePath)) {
 
 Add-UserPath -PathToAdd $BinDir
 
-if (-not $NoProfile) {
+if ($NoProfile) {
+    & $ExePath install-commands
+} else {
     & $ExePath init --yes
 }
 
 Write-Host ""
 Write-Host "Installed ps to $ExePath"
-Write-Host "Restart PowerShell or run: . `$PROFILE"
+Write-Host "Restart PowerShell or run: Import-Module PsUtils -Force"
+if (-not $NoProfile) {
+    Write-Host "To load profile hooks immediately, also run: . `$PROFILE"
+}

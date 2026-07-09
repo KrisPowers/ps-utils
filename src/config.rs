@@ -30,7 +30,7 @@ impl CommandsConfig {
         let mut commands = BTreeMap::new();
 
         commands.insert(
-            "kill".to_string(),
+            "kill-port".to_string(),
             ShortcutCommand::KillPort {
                 description: Some("Stop the process listening on a TCP port.".to_string()),
             },

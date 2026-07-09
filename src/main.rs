@@ -11,6 +11,7 @@ mod picker;
 mod ports;
 mod procs;
 mod profile;
+mod shell_module;
 mod shortcut;
 mod workspaces;
 
@@ -37,8 +38,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Install or refresh the PowerShell profile bridge.
+    /// Install or refresh the command module and PowerShell profile bridge.
     Init(InitArgs),
+
+    /// Install or refresh profile-independent PowerShell commands.
+    InstallCommands(InstallCommandsArgs),
 
     /// Open the shortcut commands JSON file.
     Commands(OpenConfigArgs),
@@ -110,6 +114,13 @@ struct InitArgs {
 }
 
 #[derive(Debug, Args)]
+struct InstallCommandsArgs {
+    /// Install to pwsh, Windows PowerShell, or both.
+    #[arg(long, value_enum, default_value_t = ShellTarget::All)]
+    shell: ShellTarget,
+}
+
+#[derive(Debug, Args)]
 struct OpenConfigArgs {
     /// Print the file path instead of opening it.
     #[arg(long)]
@@ -134,6 +145,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Init(args) => init(args),
+        Command::InstallCommands(args) => install_commands(args),
         Command::Commands(args) => open_config(ConfigFile::Commands, args),
         Command::ConfigPath { file } => {
             println!("{}", config_path(file.into()).display());
@@ -168,7 +180,18 @@ fn main() -> Result<()> {
 fn init(args: InitArgs) -> Result<()> {
     let _ = args.yes;
     let exe = std::env::current_exe().context("failed to resolve current executable")?;
+    let command_results = shell_module::install(args.shell, &exe)?;
     let results = profile::install(args.shell, &exe)?;
+
+    println!("ps command module installed.");
+    for result in command_results {
+        let status = if result.changed {
+            "updated"
+        } else {
+            "already current"
+        };
+        println!("{status}: {}", result.path.display());
+    }
 
     println!("ps profile bridge installed.");
     println!(
@@ -185,7 +208,26 @@ fn init(args: InitArgs) -> Result<()> {
         println!("{status}: {}", result.path.display());
     }
 
-    println!("Restart PowerShell or run `. $PROFILE` to load ps shortcuts.");
+    println!("Restart PowerShell to load ps commands and profile hooks.");
+    println!("For the current shell, run `Import-Module PsUtils -Force` and `. $PROFILE`.");
+    Ok(())
+}
+
+fn install_commands(args: InstallCommandsArgs) -> Result<()> {
+    let exe = std::env::current_exe().context("failed to resolve current executable")?;
+    let results = shell_module::install(args.shell, &exe)?;
+
+    println!("ps command module installed.");
+    for result in results {
+        let status = if result.changed {
+            "updated"
+        } else {
+            "already current"
+        };
+        println!("{status}: {}", result.path.display());
+    }
+
+    println!("Restart PowerShell or run `Import-Module PsUtils -Force` to refresh commands.");
     Ok(())
 }
 

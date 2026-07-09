@@ -74,22 +74,6 @@ function global:ps {{
     $global:LASTEXITCODE = $__psExitCode
 }}
 
-function global:__psInvokeShortcut {{
-    param(
-        [string]$Name,
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [object[]]$Arguments
-    )
-
-    $__psEmitted = & $script:PsCliPath emit $Name @Arguments
-    if ($LASTEXITCODE -ne 0) {{ return }}
-
-    $__psScript = $__psEmitted -join [Environment]::NewLine
-    if (-not [string]::IsNullOrWhiteSpace($__psScript)) {{
-        Invoke-Expression $__psScript
-    }}
-}}
-
 function global:__psNormalizePathText {{
     param([object]$Path)
 
@@ -1924,119 +1908,9 @@ try {{
     Write-Warning "ps session restore failed: $($_.Exception.Message)"
 }}
 
-try {{
-    if (Test-Path -LiteralPath $script:PsCommandsPath) {{
-        $commandsConfig = Get-Content -LiteralPath $script:PsCommandsPath -Raw | ConvertFrom-Json
-
-        if ($commandsConfig.commands) {{
-            foreach ($property in $commandsConfig.commands.PSObject.Properties) {{
-                $name = [string]$property.Name
-
-                if ($name -match '^[A-Za-z_][A-Za-z0-9_-]*$') {{
-                    if (Test-Path "Alias:$name") {{
-                        Remove-Item "Alias:$name" -Force -ErrorAction SilentlyContinue
-                    }}
-
-                    $escapedPath = $script:PsCliPath.Replace("'", "''")
-                    $escapedName = $name.Replace("'", "''")
-                    $shortcut = [ScriptBlock]::Create("__psInvokeShortcut '$escapedName' @args")
-                    Set-Item -Path "function:global:$name" -Value $shortcut
-                }}
-            }}
-        }}
-    }}
-}} catch {{
-    Write-Warning "ps shortcuts failed to load: $($_.Exception.Message)"
-}}
-
-if (Test-Path Alias:ports) {{
-    Remove-Item Alias:ports -Force -ErrorAction SilentlyContinue
-}}
-
-function global:ports {{
-    param(
-        [Alias('p')]
-        [int]$Port = 0,
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [object[]]$Arguments
-    )
-
-    $__psPortsArgs = @('ports')
-
-    if ($PSBoundParameters.ContainsKey('Port')) {{
-        $__psPortsArgs += @('-p', [string]$Port)
-    }}
-
-    if ($null -ne $Arguments -and $Arguments.Count -gt 0) {{
-        $__psPortsArgs += $Arguments
-    }}
-
-    & $script:PsCliPath @__psPortsArgs
-}}
-
-foreach ($__psUtilityAlias in @('doctor', 'procs', 'processes', 'history', 'envs', 'workspaces', 'reload', 'mkcd')) {{
+foreach ($__psUtilityAlias in @('doctor', 'ports', 'procs', 'processes', 'history', 'envs', 'workspaces', 'zip', 'compress', 'pack', 'reload', 'mkcd')) {{
     if (Test-Path -LiteralPath "Alias:$__psUtilityAlias") {{
         Remove-Item -LiteralPath "Alias:$__psUtilityAlias" -Force -ErrorAction SilentlyContinue
-    }}
-}}
-
-function global:doctor {{
-    & $script:PsCliPath doctor @args
-}}
-
-function global:procs {{
-    & $script:PsCliPath procs @args
-}}
-
-function global:processes {{
-    & $script:PsCliPath processes @args
-}}
-
-function global:envs {{
-    & $script:PsCliPath envs @args
-}}
-
-function global:workspaces {{
-    $resultPath = Join-Path ([IO.Path]::GetTempPath()) "ps-workspaces-$PID-$([Guid]::NewGuid().ToString('N')).ps1"
-
-    try {{
-        & $script:PsCliPath workspaces --result $resultPath @args
-        $__psWorkspacesExitCode = $LASTEXITCODE
-        $global:LASTEXITCODE = $__psWorkspacesExitCode
-
-        if ($__psWorkspacesExitCode -ne 0) {{ return }}
-        if (-not (Test-Path -LiteralPath $resultPath)) {{ return }}
-
-        $scriptText = Get-Content -LiteralPath $resultPath -Raw
-        if (-not [string]::IsNullOrWhiteSpace($scriptText)) {{
-            Invoke-Expression $scriptText
-        }}
-    }} finally {{
-        if (Test-Path -LiteralPath $resultPath) {{
-            Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
-        }}
-    }}
-}}
-
-function global:history {{
-    $resultPath = Join-Path ([IO.Path]::GetTempPath()) "ps-history-$PID-$([Guid]::NewGuid().ToString('N')).txt"
-
-    try {{
-        & $script:PsCliPath history --result $resultPath @args
-        $__psHistoryExitCode = $LASTEXITCODE
-        $global:LASTEXITCODE = $__psHistoryExitCode
-
-        if ($__psHistoryExitCode -ne 0) {{ return }}
-        if (-not (Test-Path -LiteralPath $resultPath)) {{ return }}
-
-        $command = Get-Content -LiteralPath $resultPath -Raw
-        if (-not [string]::IsNullOrWhiteSpace($command)) {{
-            Invoke-Expression $command
-        }}
-    }} finally {{
-        if (Test-Path -LiteralPath $resultPath) {{
-            Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
-        }}
     }}
 }}
 
@@ -2055,16 +1929,6 @@ function global:reload {{
 
     . $PROFILE
     Write-Host 'Profile reloaded.' -ForegroundColor Green
-}}
-
-function global:mkcd {{
-    param(
-        [Parameter(Mandatory = $true, Position = 0)]
-        [string]$Path
-    )
-
-    New-Item -ItemType Directory -Force -Path $Path | Out-Null
-    Set-Location -LiteralPath $Path
 }}
 
 try {{
@@ -2199,7 +2063,7 @@ fn replace_or_append_block(existing: &str, block: &str) -> String {
     updated
 }
 
-fn documents_dir() -> Result<PathBuf> {
+pub(crate) fn documents_dir() -> Result<PathBuf> {
     #[cfg(windows)]
     {
         let output = Command::new("powershell.exe")
@@ -2260,7 +2124,7 @@ mod tests {
     fn generated_profile_keeps_ps_shortcut_valid() {
         let block = render_block(Path::new("C:\\Program Files\\ps\\ps.exe"));
         assert!(block.contains("function global:ps"));
-        assert!(block.contains("function global:__psInvokeShortcut"));
+        assert!(!block.contains("function global:__psInvokeShortcut"));
         assert!(block.contains("function global:__psInvokePathMenu"));
         assert!(block.contains("function global:__psRenderPathMenu"));
         assert!(block.contains("function global:__psRenderPathSelectionChange"));
@@ -2301,22 +2165,23 @@ mod tests {
         assert!(block.contains(
             "__psRenderSettingsSelectionChange $entries $settings $oldSelected $selected $top"
         ));
-        assert!(block.contains("function global:ports"));
-        assert!(block.contains("function global:doctor"));
-        assert!(block.contains("function global:procs"));
-        assert!(block.contains("function global:processes"));
-        assert!(block.contains("function global:history"));
-        assert!(block.contains("function global:envs"));
-        assert!(block.contains("function global:workspaces"));
         assert!(block.contains("function global:reload"));
-        assert!(block.contains("function global:mkcd"));
         assert!(block.contains("Remove-Item -LiteralPath \"Alias:$__psUtilityAlias\""));
-        assert!(block.contains("& $script:PsCliPath history --result $resultPath @args"));
-        assert!(block.contains("& $script:PsCliPath workspaces --result $resultPath @args"));
-        assert!(block.contains("Invoke-Expression $command"));
-        assert!(block.contains("Invoke-Expression $scriptText"));
         assert!(block.contains("ParseFile($PROFILE, [ref]$tokens, [ref]$errors)"));
-        assert!(block.contains("Set-Location -LiteralPath $Path"));
+        assert!(!block.contains("function global:ports"));
+        assert!(!block.contains("function global:doctor"));
+        assert!(!block.contains("function global:zip"));
+        assert!(!block.contains("function global:compress"));
+        assert!(!block.contains("function global:pack"));
+        assert!(!block.contains("function global:procs"));
+        assert!(!block.contains("function global:processes"));
+        assert!(!block.contains("function global:history"));
+        assert!(!block.contains("function global:envs"));
+        assert!(!block.contains("function global:workspaces"));
+        assert!(!block.contains("function global:mkcd"));
+        assert!(!block.contains("Set-Item -Path \"function:global:$name\""));
+        assert!(!block.contains("& $script:PsCliPath history --result $resultPath @args"));
+        assert!(!block.contains("& $script:PsCliPath workspaces --result $resultPath @args"));
         assert!(block.contains("section = 'paths'"));
         assert!(block.contains("section = 'actions'"));
         assert!(block.contains("kind = 'delete'"));
@@ -2326,11 +2191,11 @@ mod tests {
         assert!(block.contains("ForegroundColor Red"));
         assert!(block.contains("Write-Host 'Delete saved path?' -ForegroundColor Red"));
         assert!(block.contains("Write-Host \"Deleted saved path: $clean\" -ForegroundColor Red"));
-        assert!(block.contains("Remove-Item Alias:ports"));
-        assert!(block.contains("[Alias('p')]"));
-        assert!(block.contains("$__psPortsArgs = @('ports')"));
-        assert!(block.contains("$__psPortsArgs += @('-p', [string]$Port)"));
-        assert!(block.contains("& $script:PsCliPath @__psPortsArgs"));
+        assert!(block.contains("'doctor', 'ports', 'procs'"));
+        assert!(!block.contains("[Alias('p')]"));
+        assert!(!block.contains("$__psPortsArgs = @('ports')"));
+        assert!(!block.contains("$__psPortsArgs += @('-p', [string]$Port)"));
+        assert!(!block.contains("& $script:PsCliPath @__psPortsArgs"));
         assert!(!block.contains("function global:__psInvokePortsMenu"));
         assert!(!block.contains("Get-NetTCPConnection -State Listen"));
         assert!(block.contains("$script:PsPathsPath"));
